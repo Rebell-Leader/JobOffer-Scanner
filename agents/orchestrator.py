@@ -1,5 +1,5 @@
 from langgraph.graph import Graph, StateGraph
-from typing import Dict, TypedDict
+from typing import Dict, TypedDict, Optional
 from utils.llm import get_completion
 from agents import job_analyzer, company_analyzer, salary_analyzer, report_generator
 
@@ -9,10 +9,11 @@ class JobAnalysisState(TypedDict):
     salary_analysis: dict
     final_report: str
     error: str
+    manual_inputs: Optional[dict]
 
 def create_analysis_graph():
     workflow = StateGraph(JobAnalysisState)
-    
+
     # Add nodes
     workflow.add_node("analyze_job", job_analyzer.analyze)
     workflow.add_node("analyze_company", company_analyzer.analyze)
@@ -26,20 +27,21 @@ def create_analysis_graph():
 
     # Set entry point
     workflow.set_entry_point("analyze_job")
-    
+
     return workflow.compile()
 
-def run_analysis(job_posting: str) -> dict:
+def run_analysis(job_posting: str, manual_inputs: Optional[dict] = None) -> dict:
     graph = create_analysis_graph()
-    
+
     initial_state = JobAnalysisState(
         job_details={},
         company_analysis={},
         salary_analysis={},
         final_report="",
-        error=""
+        error="",
+        manual_inputs=manual_inputs
     )
-    
+
     try:
         result = graph.invoke({
             "job_posting": job_posting,
@@ -52,5 +54,6 @@ def run_analysis(job_posting: str) -> dict:
             company_analysis={},
             salary_analysis={},
             final_report="",
-            error=str(e)
+            error=str(e),
+            manual_inputs=manual_inputs
         )
