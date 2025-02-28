@@ -1,0 +1,74 @@
+Overview
+The AI-driven microSaaS platform helps job seekers analyze job postings, evaluate company stability, compare salaries with the market, and assess their resume’s suitability. The system comprises multiple specialized agents working in coordination.
+
+Users interact through:
+
+Telegram Bot (MVP)
+Web Interface (Gradio/Streamlit) (MVP)
+Chrome Extension (Future)
+2. Key Components & Agents
+2.1. Orchestrator Agent
+Manages pipeline execution.
+Calls sub-agents and aggregates results.
+Ensures caching and retries failed requests.
+Uses LLMGuard for prompt injection protection.
+2.2. Job Posting & Company Analysis
+Job Scraper: Extracts job details from LinkedIn, Glassdoor, and company websites.
+Company Analyst:
+Searches Glassdoor for salary data.
+Checks layoffs on Layoffs.fyi.
+Analyzes Yahoo Finance news & stock trends (if applicable).
+Extracts and summarizes annual reports (if available).
+Assigns a company stability score.
+2.3. Salary & Cost of Living Estimation
+Salary Estimator:
+Fetches salary benchmarks from Comprehensive.io.
+Estimates missing salaries using similar job postings.
+Cost of Living Adjuster:
+Retrieves living costs from Numbeo.
+Adjusts salaries accordingly for relocation scenarios.
+2.4. Resume Analysis & ATS Optimization
+Resume Analyzer:
+Evaluates readability using an LLM.
+Checks formatting and content quality.
+ATS Optimization Agent:
+Ensures keyword optimization.
+Identifies formatting issues that may block ATS parsing.
+Scores resume relevance to the job posting.
+Career Coach (Future Feature):
+Provides skill gap analysis.
+Suggests improvements for better job matching.
+2.5. Report Generation & Recommendation
+Aggregates all agent outputs into a structured report.
+Generates a Green/Yellow/Red recommendation for the job.
+3. System Architecture
+3.1. Tech Stack
+Backend: Python (FastAPI for API, Celery for async tasks)
+Frontend: Streamlit/Gradio (for MVP)
+Database: PostgreSQL (storing job/resume data, cache)
+Caching: Redis (to avoid redundant web searches)
+Web Scraping: Playwright/Selenium (for dynamic pages)
+LLMs: OpenAI GPT, Claude (for resume analysis and job parsing)
+Security: LLMGuard (for prompt injection protection)
+3.2. Data Flow
+User submits a job post link or text (optional: resume).
+Orchestrator Agent dispatches tasks to sub-agents:
+Job & company analysis.
+Salary benchmarking.
+Resume assessment.
+Results are aggregated into a structured report.
+User receives the AI-driven recommendation.
+3.3. Scaling Strategy
+Microservices-based agent design (each agent can run independently).
+Task queue (Celery + Redis) for parallel processing.
+Horizontal scaling using Kubernetes (future stage).
+API rate limiters & caching to minimize redundant requests.
+4. MVP Roadmap
+MVP (Telegram Bot + Web UI)
+Job post analysis (scraper + company analysis).
+Salary benchmarking.
+Initial resume analysis.
+Simple report generation.
+Next Iteration
+Full ATS resume optimization.
+Career coaching agent.
