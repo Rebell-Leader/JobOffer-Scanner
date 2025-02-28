@@ -9,12 +9,25 @@ def analyze(state: Dict) -> Dict:
         job_details = state.get("job_details", {})
         extracted_details = job_details.get("extracted_details", {})
 
-        if not isinstance(extracted_details, dict):
-            raise ValueError("Job details not in expected format")
+        # More flexible company name extraction
+        company_name = None
 
-        company_name = extracted_details.get("company_name", "")
-        if not company_name or company_name == "Unknown":
-            raise ValueError("Company name not found in job details")
+        # Try different possible keys/formats
+        if isinstance(extracted_details, dict):
+            company_name = (
+                extracted_details.get("company_name") or
+                extracted_details.get("Company Name") or
+                extracted_details.get("company") or
+                None
+            )
+
+        # If still no company name, try to extract from raw job details
+        if not company_name and isinstance(job_details, dict):
+            company_name = job_details.get("company_name")
+
+        if not company_name:
+            print(f"Debug - extracted_details: {extracted_details}")
+            raise ValueError("Company name could not be extracted from job details")
 
         stability_analysis = company_tools[0].func(company_name)
         company_reviews = company_tools[1].func(company_name)
@@ -25,5 +38,6 @@ def analyze(state: Dict) -> Dict:
         }
     except Exception as e:
         state["error"] = f"Company analysis failed: {str(e)}"
+        print(f"Company analysis error - Details: {job_details}")  # Debug logging
 
     return state
