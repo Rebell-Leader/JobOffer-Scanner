@@ -14,136 +14,152 @@ def display_analysis_progress(result: dict):
     # Job Details Extraction
     job_details = result.get("job_details", {})
     extracted_details = job_details.get("extracted_details", {})
-    st.write("1. Job Details Extraction", "✅" if extracted_details else "⏳")
-
-    # Company Research
-    company_analysis = result.get("company_analysis", {})
-    if company_analysis:
-        st.write("2. Company Research ✅")
-        with st.expander("Research Sources"):
-            st.write("- 🔍 Web Search Analysis")
-            st.write("- 📰 Yahoo Finance News")
-            st.write("- 📊 Stock Performance")
-            st.write("- 👥 Employee Reviews")
-            st.write("- 🚨 Layoffs.fyi Data")
-    else:
-        st.write("2. Company Research ⏳")
-
-    # Compensation Analysis
-    salary_analysis = result.get("salary_analysis", {})
-    if salary_analysis:
-        st.write("3. Compensation Analysis ✅")
-        with st.expander("Analysis Sources"):
-            st.write("- 💰 Comprehensive.io Data")
-            st.write("- 🏘️ Numbeo Cost of Living")
-            st.write("- 📊 Market Rate Analysis")
-    else:
-        st.write("3. Compensation Analysis ⏳")
-
-    # Final Report
-    st.write("4. Final Report", "✅" if result.get("final_report") else "⏳")
-
-
-def get_manual_inputs(auto_extracted=None):
-    """Get manual inputs for job details."""
-    st.subheader("📝 Job Details")
-    st.info("Please verify or update the job information below")
-
-    # Initialize with auto-extracted values if available
-    defaults = auto_extracted or {}
 
     col1, col2 = st.columns(2)
 
     with col1:
-        company_name = st.text_input(
-            "Company Name*",
-            value=defaults.get("company_name", ""),
-            help="Enter the company name"
-        )
-
-        job_title = st.text_input(
-            "Job Title*",
-            value=defaults.get("job_title", ""),
-            help="Enter the position title"
-        )
-
-        location = st.text_input(
-            "Location*",
-            value=defaults.get("location", ""),
-            help="Enter job location (city, country)"
-        )
+        st.write("📋 Features Extracted:")
+        if extracted_details:
+            st.success("✅ Job details parsed successfully")
+            st.write("- Company Name")
+            st.write("- Location")
+            st.write("- Required Skills")
+            st.write("- Tasks")
+            st.write("- Compensation")
+        else:
+            st.warning("⏳ Extracting job details...")
 
     with col2:
-        experience = st.text_input(
-            "Required Experience",
-            value=defaults.get("experience_level", ""),
-            help="e.g., '3+ years', 'Senior level'"
-        )
+        st.write("🔍 Tools Analysis:")
+        if result.get("company_analysis"):
+            st.success("✅ Company research completed")
+            st.write("- Layoffs Analysis")
+            st.write("- Salary Level Analysis")
+            st.write("- Glassdoor Reviews")
+            st.write("- Cost of Living")
+        else:
+            st.warning("⏳ Analyzing company data...")
 
-        compensation = st.text_input(
-            "Compensation",
-            value=defaults.get("compensation", ""),
-            help="Salary/compensation details"
-        )
-
-        job_type = st.selectbox(
-            "Job Type*",
-            options=["Full-time", "Part-time", "Contract", "Internship", "Other"],
-            index=0,
-            help="Select employment type"
-        )
-
-    skills = st.text_area(
-        "Required Skills*",
-        value="\n".join(defaults.get("required_skills", [])),
-        help="Enter skills, one per line",
-        height=100
-    )
-
-    # Return structured data
-    return {
-        "company_name": company_name,
-        "job_title": job_title,
-        "location": location,
-        "experience_level": experience,
-        "compensation": compensation,
-        "job_type": job_type,
-        "required_skills": [skill.strip() for skill in skills.split("\n") if skill.strip()]
-    }
-
-def main():
-    st.title("🤖 AI Job Analysis Platform")
+def get_job_form():
+    """Display the job posting form."""
     st.write("Analyze job postings with AI-powered insights")
 
-    with st.container():
-        # Job Posting Input
-        job_text = st.text_area(
-            "Paste the job posting here",
-            height=200,
-            placeholder="Paste the complete job posting text here..."
+    job_text = st.text_area(
+        "Paste the job posting here",
+        height=200,
+        placeholder="Paste the complete job posting text here...",
+        key="job_posting_input"
+    )
+
+    analyze_clicked = st.button("Analyze Job", type="primary")
+    return job_text, analyze_clicked
+
+def get_manual_inputs(auto_extracted=None):
+    """Show form for manual job details input."""
+    st.subheader("📝 Job Details")
+    st.info("Please verify or update the information below")
+
+    defaults = auto_extracted or {}
+
+    with st.form("job_details_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            company_name = st.text_input(
+                "Company Name*",
+                value=defaults.get("company_name", ""),
+                help="Enter the company name"
+            )
+
+            job_title = st.text_input(
+                "Job Title*",
+                value=defaults.get("job_title", ""),
+                help="Enter the position title"
+            )
+
+            location = st.text_input(
+                "Location*",
+                value=defaults.get("location", ""),
+                help="Enter job location (city, country)"
+            )
+
+        with col2:
+            experience = st.text_input(
+                "Required Experience",
+                value=defaults.get("experience_level", ""),
+                help="e.g., '3+ years', 'Senior level'"
+            )
+
+            compensation = st.text_input(
+                "Compensation",
+                value=defaults.get("compensation", ""),
+                help="Salary/compensation details"
+            )
+
+            job_type = st.selectbox(
+                "Job Type*",
+                options=["Full-time", "Part-time", "Contract", "Internship", "Other"],
+                index=0,
+                help="Select employment type"
+            )
+
+        skills = st.text_area(
+            "Required Skills*",
+            value="\n".join(defaults.get("required_skills", [])),
+            help="Enter skills, one per line",
+            height=100
         )
 
-        analyze_button = st.button("Analyze Job", type="primary")
+        submitted = st.form_submit_button("Update Analysis", type="primary")
 
-        if analyze_button and job_text:
+        if submitted:
+            return {
+                "company_name": company_name,
+                "job_title": job_title,
+                "location": location,
+                "experience_level": experience,
+                "compensation": compensation,
+                "job_type": job_type,
+                "required_skills": [skill.strip() for skill in skills.split("\n") if skill.strip()]
+            }
+        return None
+
+def main():
+    # Header
+    st.title("🤖 AI Job Analysis Platform")
+
+    # Initialize session state
+    if "analysis_started" not in st.session_state:
+        st.session_state.analysis_started = False
+    if "job_text" not in st.session_state:
+        st.session_state.job_text = ""
+    if "analysis_result" not in st.session_state:
+        st.session_state.analysis_result = None
+
+    # Main content
+    with st.container():
+        job_text, analyze_clicked = get_job_form()
+
+        if analyze_clicked and job_text:
             st.session_state.job_text = job_text
             st.session_state.analysis_started = True
 
-        if st.session_state.get("analysis_started"):
-            with st.spinner("Processing job posting..."):
-                # First pass - automatic extraction
-                result = run_analysis(st.session_state.job_text)
+            with st.spinner("Analyzing job posting..."):
+                result = run_analysis(job_text)
+                st.session_state.analysis_result = result
 
-                # Display progress
+                if result.get("error"):
+                    st.warning("Automatic extraction needs verification. Please review the details below.")
+
+                # Show progress tracking
                 display_analysis_progress(result)
 
-                # Show form for manual input/verification
+                # Show manual input form
                 auto_extracted = result.get("job_details", {}).get("extracted_details", {})
                 manual_inputs = get_manual_inputs(auto_extracted)
 
-                if st.button("Update Analysis", type="primary"):
-                    # Rerun analysis with manual inputs
-                    updated_result = run_analysis(st.session_state.job_text, manual_inputs)
+                if manual_inputs:
+                    updated_result = run_analysis(job_text, manual_inputs)
                     display_analysis_progress(updated_result)
 
                     if not updated_result.get("error"):
@@ -164,7 +180,13 @@ def main():
                     else:
                         st.error(f"Analysis failed: {updated_result['error']}")
 
-    # Sidebar information
+        elif st.session_state.analysis_started and st.session_state.analysis_result:
+            # Continue showing previous analysis results
+            display_analysis_progress(st.session_state.analysis_result)
+            auto_extracted = st.session_state.analysis_result.get("job_details", {}).get("extracted_details", {})
+            get_manual_inputs(auto_extracted)
+
+    # Sidebar
     st.sidebar.title("About")
     st.sidebar.info(
         "This AI-powered platform helps you analyze job postings, "
@@ -177,10 +199,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    # Initialize session state
-    if "analysis_started" not in st.session_state:
-        st.session_state.analysis_started = False
-    if "job_text" not in st.session_state:
-        st.session_state.job_text = ""
-
     main()
