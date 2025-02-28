@@ -8,4 +8,5 @@ dependencies = [
     "langgraph>=0.3.1",
     "openai>=1.65.1",
     "streamlit>=1.42.2",
+    "twilio>=9.4.6",
 ]
