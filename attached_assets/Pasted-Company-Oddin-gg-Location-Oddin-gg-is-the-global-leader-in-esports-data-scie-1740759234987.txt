@@ -1,0 +1,47 @@
+Company: Oddin.gg
+Location: Прага, Прага, Чехия
+Oddin.gg is the global leader in esports data science. The company was recognized as the fastest-growing tech company in Central Europe in 2024 by Deloitte. We deliver a comprehensive solution specializing in esports titles such as Dota2, League of Legends, and simulators like FIFA (soccer) to bookmakers across the globe. Based on data from our unique partners, we create and continuously enhance our own mathematical models to predict match odds. Our efforts have been recognized with the prestigious award "Esports Solution Tool of the Year" for our revolutionary BetBuilder product, which redefines the esports betting experience.
+
+
+
+With a team of 200+ people, based in the Czech Republic and many other locations across Europe and Asia, Oddin.gg is growing at a superfast pace. And that brings us to you 🫵
+
+
+
+Your position on the board
+
+🧭Develop AI simulations for CS2, Dota2, and LoL as well as classical sports.
+📈Collaborate with senior engineers to design deep learning models that replicate real player behavior, team dynamics, and match flow.
+🤝Experiment with cutting-edge architectures like transformers, reinforcement learning, or large language models (LLMs) to deliver high-fidelity simulations and match outcome predictions.
+💼Build, train, and deploy models at scale on AWS, setting up early-stage MLOps practices from scratch.
+🛠️Define and implement data engineering pipelines, ensuring consistent data quality and robust training pipelines.
+🌟Shape the technical roadmap, driving full model lifecycles ending with deployment and optimization.
+🧭Help scale both the project and the team after successfully proving the concept’s commercial impact.
+
+
+
+
+Our idea of you
+
+At least 4 years of experience in machine learning or data science, with a track record of production-level deployments.
+Proficiency in Python and ML frameworks like PyTorch or TensorFlow.
+A solid understanding of advanced neural network architectures including transformers.
+Practical experience deploying models on AWS and being comfortable establishing basic CI/CD or MLOps pipelines.
+Thriving in a fast-paced, collaborative environment where you can co-create innovations with senior engineers on a greenfield project.
+
+
+Haven't we caught you yet?
+
+
+
+Help us maintain our position as the No. 1 esports analytics company with the new focus on AI-powered video.
+Imagine a culture that embraces change and quickly adapts to global opportunities.
+Experience immense potential for personal growth while contributing to an innovative team.W
+ork remotely or in a hybrid style – whatever suits you best.
+Enjoy our luxurious Norse-myth-inspired offices in Prague.
+Improve your English with company-sponsored language courses.
+Participate in quarterly team-building activities to bond with your team.
+Benefit from a sponsored Multisport card or spend time at our Bali house for work or vacation.
+Compensation: eur 65k/year + bonuses
+
+Ready to become One of us?
