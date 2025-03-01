@@ -2,12 +2,14 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.pool import QueuePool
 from models import User, Report, db
 from agents.orchestrator import run_analysis
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
+import pandas as pd  # Import pandas at the top level
 
 # Load environment variables
 load_dotenv()
@@ -19,13 +21,49 @@ st.set_page_config(
     layout="wide"
 )
 
-# Database setup
+# Database setup with connection pooling and retry mechanism
 DATABASE_URL = os.environ.get("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
-Session = sessionmaker(bind=engine)
+
+# If the DATABASE_URL doesn't include SSL parameters and it's not a local connection,
+# add the SSL parameters to ensure secure connection
+if DATABASE_URL and "postgres://" in DATABASE_URL and "localhost" not in DATABASE_URL and "?sslmode=" not in DATABASE_URL:
+    DATABASE_URL = f"{DATABASE_URL}?sslmode=require"
+
+engine = create_engine(
+    DATABASE_URL,
+    poolclass=QueuePool, 
+    pool_size=5, 
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=1800,  # Recycle connections after 30 minutes
+    connect_args={"connect_timeout": 30}
+)
+
+# Configure engine to ping connections
+@event.listens_for(engine, "engine_connect")
+def ping_connection(connection, branch):
+    if branch:
+        # "branch" refers to a sub-connection of a connection
+        # don't ping on checkout of a "branch"
+        return
+
+    # ping the connection to check if it's still active
+    try:
+        connection.scalar(("SELECT 1"))
+    except:
+        # if not, reconnect
+        connection.invalidate()
+
+# Create scoped session factory
+Session = scoped_session(sessionmaker(bind=engine))
 
 # Initialize database and create tables if they don't exist
-db.metadata.create_all(engine)
+try:
+    db.metadata.create_all(engine)
+    st.session_state['db_initialized'] = True
+except Exception as e:
+    st.error(f"Database initialization error: {str(e)}")
+    st.session_state['db_initialized'] = False
 
 # Initialize session state for user authentication
 if 'user_id' not in st.session_state:
@@ -42,74 +80,89 @@ if 'page' not in st.session_state:
 # Function to create admin user if it doesn't exist
 def create_admin_user():
     session = Session()
-    admin_exists = session.query(User).filter_by(email='admin@applywise.com').first()
+    try:
+        admin_exists = session.query(User).filter_by(email='admin@applywise.com').first()
 
-    if not admin_exists:
-        admin_user = User(
-            email='admin@applywise.com',
-            name='Admin',
-            password=generate_password_hash('adminpassword'),
-            is_admin=True,
-            is_premium=True,
-            weekly_analyses_count=0,
-            last_analysis_reset=datetime.utcnow()
-        )
-        session.add(admin_user)
-        session.commit()
-    session.close()
+        if not admin_exists:
+            admin_user = User(
+                email='admin@applywise.com',
+                name='Admin',
+                password=generate_password_hash('adminpassword'),
+                is_admin=True,
+                is_premium=True,
+                weekly_analyses_count=0,
+                last_analysis_reset=datetime.utcnow()
+            )
+            session.add(admin_user)
+            session.commit()
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        session.rollback()
+    finally:
+        session.close()
 
 # Create admin user
-create_admin_user()
+try:
+    create_admin_user()
+except Exception as e:
+    st.error(f"Error creating admin user: {str(e)}")
 
 # Authentication functions
 def login(email, password):
     session = Session()
-    user = session.query(User).filter_by(email=email).first()
+    try:
+        user = session.query(User).filter_by(email=email).first()
 
-    if user and check_password_hash(user.password, password):
-        # Update weekly analysis count if needed
-        week_ago = datetime.utcnow() - timedelta(days=7)
-        if user.last_analysis_reset < week_ago:
-            user.weekly_analyses_count = 0
-            user.last_analysis_reset = datetime.utcnow()
-            session.commit()
+        if user and check_password_hash(user.password, password):
+            # Update weekly analysis count if needed
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            if user.last_analysis_reset < week_ago:
+                user.weekly_analyses_count = 0
+                user.last_analysis_reset = datetime.utcnow()
+                session.commit()
 
-        # Set session state
-        st.session_state.user_id = user.id
-        st.session_state.user_name = user.name
-        st.session_state.is_premium = user.is_premium
+            # Set session state
+            st.session_state.user_id = user.id
+            st.session_state.user_name = user.name
+            st.session_state.is_premium = user.is_premium
 
-        # Calculate analyses remaining
-        analyses_limit = 30 if user.is_premium else 3
-        st.session_state.analyses_remaining = max(0, analyses_limit - user.weekly_analyses_count)
+            # Calculate analyses remaining
+            analyses_limit = 30 if user.is_premium else 3
+            st.session_state.analyses_remaining = max(0, analyses_limit - user.weekly_analyses_count)
 
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Login error: {str(e)}")
+        return False
+    finally:
         session.close()
-        return True
-
-    session.close()
-    return False
 
 def register(name, email, password):
     session = Session()
-    existing_user = session.query(User).filter_by(email=email).first()
+    try:
+        existing_user = session.query(User).filter_by(email=email).first()
 
-    if existing_user:
+        if existing_user:
+            return False, "Email already registered"
+
+        # Create a new user
+        new_user = User(
+            email=email,
+            name=name,
+            password=generate_password_hash(password),
+            weekly_analyses_count=0,
+            last_analysis_reset=datetime.utcnow()
+        )
+
+        session.add(new_user)
+        session.commit()
+        return True, "Registration successful"
+    except Exception as e:
+        session.rollback()
+        return False, f"Registration error: {str(e)}"
+    finally:
         session.close()
-        return False, "Email already registered"
-
-    # Create a new user
-    new_user = User(
-        email=email,
-        name=name,
-        password=generate_password_hash(password),
-        weekly_analyses_count=0,
-        last_analysis_reset=datetime.utcnow()
-    )
-
-    session.add(new_user)
-    session.commit()
-    session.close()
-    return True, "Registration successful"
 
 def logout():
     st.session_state.user_id = None
@@ -125,40 +178,49 @@ def nav_to(page):
 # Function to save a report to the database
 def save_report(result, job_data, job_description):
     session = Session()
-    user = session.query(User).filter_by(id=st.session_state.user_id).first()
+    try:
+        user = session.query(User).filter_by(id=st.session_state.user_id).first()
 
-    if not user:
+        if not user:
+            return False, "User not found"
+
+        # Create new report
+        new_report = Report(
+            user_id=user.id,
+            company_name=job_data.get("company_name"),
+            job_title=job_data.get("job_title"),
+            location=job_data.get("location"),
+            job_details=result.get("job_details"),
+            company_analysis=result.get("company_analysis"),
+            salary_analysis=result.get("salary_analysis"),
+            final_report=result.get("final_report"),
+            job_posting=job_description
+        )
+
+        # Update user's analysis count
+        user.weekly_analyses_count += 1
+
+        # Update session state
+        analyses_limit = 30 if user.is_premium else 3
+        st.session_state.analyses_remaining = max(0, analyses_limit - user.weekly_analyses_count)
+
+        session.add(new_report)
+        session.commit()
+        return True, new_report.id
+    except Exception as e:
+        session.rollback()
+        st.error(f"Error saving report: {str(e)}")
+        return False, str(e)
+    finally:
         session.close()
-        return False, "User not found"
-
-    # Create new report
-    new_report = Report(
-        user_id=user.id,
-        company_name=job_data.get("company_name"),
-        job_title=job_data.get("job_title"),
-        location=job_data.get("location"),
-        job_details=result.get("job_details"),
-        company_analysis=result.get("company_analysis"),
-        salary_analysis=result.get("salary_analysis"),
-        final_report=result.get("final_report"),
-        job_posting=job_description
-    )
-
-    # Update user's analysis count
-    user.weekly_analyses_count += 1
-
-    # Update session state
-    analyses_limit = 30 if user.is_premium else 3
-    st.session_state.analyses_remaining = max(0, analyses_limit - user.weekly_analyses_count)
-
-    session.add(new_report)
-    session.commit()
-    session.close()
-    return True, new_report.id
 
 # Landing page
 def show_landing_page():
-    st.image("static/img/logo.svg", width=200)
+    try:
+        st.image("static/img/logo.svg", width=200)
+    except Exception as e:
+        st.error(f"Error loading logo: {str(e)}")
+
     st.title("ApplyWise")
     st.write("Take the guesswork out of job applications. ApplyWise offers a detailed evaluation of job descriptions, market conditions, and company stability, ensuring you make the best career moves.")
 
@@ -264,37 +326,45 @@ def show_dashboard():
 
     # Fetch reports from the database
     session = Session()
-    reports = session.query(Report).filter_by(user_id=st.session_state.user_id).order_by(Report.created_at.desc()).all()
-    session.close()
+    try:
+        reports = session.query(Report).filter_by(user_id=st.session_state.user_id).order_by(Report.created_at.desc()).all()
 
-    if reports:
-        st.subheader("Your Job Analyses")
+        if reports:
+            st.subheader("Your Job Analyses")
 
-        # Convert reports to a list of dictionaries for display
-        report_data = []
-        for report in reports:
-            report_data.append({
-                "id": report.id,
-                "date": report.created_at.strftime("%Y-%m-%d"),
-                "company": report.company_name,
-                "position": report.job_title,
-                "location": report.location
-            })
+            # Convert reports to a list of dictionaries for display
+            report_data = []
+            for report in reports:
+                report_data.append({
+                    "id": report.id,
+                    "date": report.created_at.strftime("%Y-%m-%d"),
+                    "company": report.company_name,
+                    "position": report.job_title,
+                    "location": report.location
+                })
 
-        # Display reports as a table
-        df = pd.DataFrame(report_data)
-        st.dataframe(df, use_container_width=True)
+            # Display reports as a table
+            df = pd.DataFrame(report_data)
+            st.dataframe(df, use_container_width=True)
 
-        # Selection for viewing a report
-        report_ids = [r["id"] for r in report_data]
-        report_labels = [f"{r['company']} - {r['position']}" for r in report_data]
-        selected_report = st.selectbox("Select a report to view", options=report_ids, format_func=lambda x: report_labels[report_ids.index(x)])
+            # Selection for viewing a report
+            report_ids = [r["id"] for r in report_data]
+            report_labels = [f"{r['company']} - {r['position']}" for r in report_data]
 
-        if st.button("View Selected Report"):
-            st.session_state.selected_report_id = selected_report
-            nav_to('view_report')
-    else:
-        st.info("You haven't analyzed any jobs yet. Start by creating a new analysis.")
+            if report_ids:  # Check if the list is not empty
+                selected_report = st.selectbox("Select a report to view", 
+                                             options=report_ids, 
+                                             format_func=lambda x: report_labels[report_ids.index(x)])
+
+                if st.button("View Selected Report"):
+                    st.session_state.selected_report_id = selected_report
+                    nav_to('view_report')
+        else:
+            st.info("You haven't analyzed any jobs yet. Start by creating a new analysis.")
+    except Exception as e:
+        st.error(f"Error loading reports: {str(e)}")
+    finally:
+        session.close()
 
 # Analyze job page
 def show_analyze_page():
@@ -407,49 +477,72 @@ def show_analyze_page():
                         status_text.text("Generating final recommendation...")
                         progress_bar.progress(100)
 
-                # Run analysis
-                result = run_analysis(job_description, job_data, selected_model, progress_callback=update_progress)
+                try:
+                    # Run analysis
+                    result = run_analysis(job_description, job_data, selected_model, progress_callback=update_progress)
 
-                if result.get("error"):
-                    st.error(f"Analysis failed: {result['error']}")
-                else:
-                    # Final progress update
-                    status_text.text("Analysis completed!")
-                    progress_bar.progress(100)
-
-                    # Save the report to the database
-                    success, report_id = save_report(result, job_data, job_description)
-
-                    if success:
-                        st.success("Analysis completed and saved!")
-
-                        # Display results in expandable sections
-                        with st.expander("🎯 Job Analysis", expanded=True):
-                            st.write(result["job_details"])
-
-                            # Display skills found
-                            requirements = result["job_details"].get("requirements_analysis", {})
-                            if requirements:
-                                st.subheader("Key Skills Required")
-                                tech_skills = requirements.get("technical_skills", [])
-                                if tech_skills:
-                                    st.write("Technical Skills:")
-                                    for skill in tech_skills:
-                                        st.write(f"- {skill}")
-
-                        with st.expander("🏢 Company Research", expanded=True):
-                            st.write(result["company_analysis"])
-
-                        with st.expander("💰 Compensation Analysis", expanded=True):
-                            st.write(result["salary_analysis"])
-
-                        st.subheader("📑 Final Recommendation")
-                        st.markdown(result["final_report"])
-
-                        if st.button("Back to Dashboard"):
-                            nav_to('dashboard')
+                    if result.get("error"):
+                        st.error(f"Analysis failed: {result['error']}")
                     else:
-                        st.error("Failed to save the report. Please try again.")
+                        # Final progress update
+                        status_text.text("Analysis completed!")
+                        progress_bar.progress(100)
+
+                        try:
+                            # Save the report to the database
+                            success, report_id_or_error = save_report(result, job_data, job_description)
+
+                            if success:
+                                st.success("Analysis completed and saved!")
+
+                                # Display results in expandable sections
+                                with st.expander("🎯 Job Analysis", expanded=True):
+                                    st.write(result["job_details"])
+
+                                    # Display skills found
+                                    requirements = result["job_details"].get("requirements_analysis", {})
+                                    if requirements:
+                                        st.subheader("Key Skills Required")
+                                        tech_skills = requirements.get("technical_skills", [])
+                                        if tech_skills:
+                                            st.write("Technical Skills:")
+                                            for skill in tech_skills:
+                                                st.write(f"- {skill}")
+
+                                with st.expander("🏢 Company Research", expanded=True):
+                                    st.write(result["company_analysis"])
+
+                                with st.expander("💰 Compensation Analysis", expanded=True):
+                                    st.write(result["salary_analysis"])
+
+                                st.subheader("📑 Final Recommendation")
+                                st.markdown(result["final_report"])
+
+                                if st.button("Back to Dashboard"):
+                                    nav_to('dashboard')
+                            else:
+                                st.error(f"Failed to save the report: {report_id_or_error}")
+                                # Display results anyway even if saving failed
+                                st.subheader("Analysis Results (Not Saved)")
+
+                                with st.expander("🎯 Job Analysis"):
+                                    st.write(result["job_details"])
+
+                                with st.expander("🏢 Company Research"):
+                                    st.write(result["company_analysis"])
+
+                                with st.expander("💰 Compensation Analysis"):
+                                    st.write(result["salary_analysis"])
+
+                                st.subheader("📑 Final Recommendation")
+                                st.markdown(result["final_report"])
+                        except Exception as save_error:
+                            st.error(f"Failed to save report due to database error: {str(save_error)}")
+                            # Display results anyway
+                            st.subheader("Analysis Results (Not Saved)")
+                            st.write(result)
+                except Exception as analysis_error:
+                    st.error(f"Analysis failed: {str(analysis_error)}")
         else:
             st.warning("Please fill in all required fields marked with *")
 
@@ -466,91 +559,95 @@ def show_view_report():
 
     # Fetch the report from the database
     session = Session()
-    report = session.query(Report).filter_by(id=st.session_state.selected_report_id, user_id=st.session_state.user_id).first()
-    session.close()
+    try:
+        report = session.query(Report).filter_by(id=st.session_state.selected_report_id, user_id=st.session_state.user_id).first()
 
-    if not report:
-        st.error("Report not found")
+        if not report:
+            st.error("Report not found")
+            if st.button("Back to Dashboard"):
+                nav_to('dashboard')
+            return
+
+        # Display report
+        st.title(f"{report.job_title} at {report.company_name}")
+        st.caption(f"Created on {report.created_at.strftime('%Y-%m-%d')}")
+
+        # Basic info
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**Company:** {report.company_name}")
+            st.markdown(f"**Position:** {report.job_title}")
+        with col2:
+            st.markdown(f"**Location:** {report.location}")
+            if report.job_details and report.job_details.get("extracted_details", {}).get("compensation"):
+                st.markdown(f"**Compensation:** {report.job_details['extracted_details']['compensation']}")
+
+        # Report tabs
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Final Report", "Job Details", "Company Analysis", "Salary Analysis", "Original Posting"])
+
+        with tab1:
+            if report.final_report:
+                st.markdown(report.final_report)
+            else:
+                st.info("No final report available")
+
+        with tab2:
+            if report.job_details and report.job_details.get("requirements_analysis"):
+                requirements = report.job_details["requirements_analysis"]
+
+                if requirements.get("technical_skills"):
+                    st.subheader("Technical Skills")
+                    for skill in requirements["technical_skills"]:
+                        st.write(f"- {skill}")
+
+                if requirements.get("soft_skills"):
+                    st.subheader("Soft Skills")
+                    for skill in requirements["soft_skills"]:
+                        st.write(f"- {skill}")
+
+                if requirements.get("education"):
+                    st.subheader("Education Requirements")
+                    st.write(requirements["education"])
+
+                if requirements.get("experience"):
+                    st.subheader("Experience Requirements")
+                    st.write(requirements["experience"])
+
+                if requirements.get("tools_and_technologies"):
+                    st.subheader("Tools & Technologies")
+                    for tool in requirements["tools_and_technologies"]:
+                        st.write(f"- {tool}")
+            else:
+                st.info("No detailed job analysis available")
+
+        with tab3:
+            if report.company_analysis:
+                if report.company_analysis.get("stability_analysis"):
+                    st.subheader("Company Stability Analysis")
+                    st.markdown(report.company_analysis["stability_analysis"])
+
+                if report.company_analysis.get("company_reviews"):
+                    st.subheader("Company Reviews & Culture")
+                    st.markdown(report.company_analysis["company_reviews"])
+            else:
+                st.info("No company analysis available")
+
+        with tab4:
+            if report.salary_analysis and report.salary_analysis.get("estimated_range"):
+                st.markdown(report.salary_analysis["estimated_range"])
+            else:
+                st.info("No salary analysis available")
+
+        with tab5:
+            st.subheader("Original Job Posting")
+            st.code(report.job_posting)
+
         if st.button("Back to Dashboard"):
             nav_to('dashboard')
-        return
-
-    # Display report
-    st.title(f"{report.job_title} at {report.company_name}")
-    st.caption(f"Created on {report.created_at.strftime('%Y-%m-%d')}")
-
-    # Basic info
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**Company:** {report.company_name}")
-        st.markdown(f"**Position:** {report.job_title}")
-    with col2:
-        st.markdown(f"**Location:** {report.location}")
-        if report.job_details and report.job_details.get("extracted_details", {}).get("compensation"):
-            st.markdown(f"**Compensation:** {report.job_details['extracted_details']['compensation']}")
-
-    # Report tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Final Report", "Job Details", "Company Analysis", "Salary Analysis", "Original Posting"])
-
-    with tab1:
-        if report.final_report:
-            st.markdown(report.final_report)
-        else:
-            st.info("No final report available")
-
-    with tab2:
-        if report.job_details and report.job_details.get("requirements_analysis"):
-            requirements = report.job_details["requirements_analysis"]
-
-            if requirements.get("technical_skills"):
-                st.subheader("Technical Skills")
-                for skill in requirements["technical_skills"]:
-                    st.write(f"- {skill}")
-
-            if requirements.get("soft_skills"):
-                st.subheader("Soft Skills")
-                for skill in requirements["soft_skills"]:
-                    st.write(f"- {skill}")
-
-            if requirements.get("education"):
-                st.subheader("Education Requirements")
-                st.write(requirements["education"])
-
-            if requirements.get("experience"):
-                st.subheader("Experience Requirements")
-                st.write(requirements["experience"])
-
-            if requirements.get("tools_and_technologies"):
-                st.subheader("Tools & Technologies")
-                for tool in requirements["tools_and_technologies"]:
-                    st.write(f"- {tool}")
-        else:
-            st.info("No detailed job analysis available")
-
-    with tab3:
-        if report.company_analysis:
-            if report.company_analysis.get("stability_analysis"):
-                st.subheader("Company Stability Analysis")
-                st.markdown(report.company_analysis["stability_analysis"])
-
-            if report.company_analysis.get("company_reviews"):
-                st.subheader("Company Reviews & Culture")
-                st.markdown(report.company_analysis["company_reviews"])
-        else:
-            st.info("No company analysis available")
-
-    with tab4:
-        if report.salary_analysis and report.salary_analysis.get("estimated_range"):
-            st.markdown(report.salary_analysis["estimated_range"])
-        else:
-            st.info("No salary analysis available")
-
-    with tab5:
-        st.subheader("Original Job Posting")
-        st.code(report.job_posting)
-
-    if st.button("Back to Dashboard"):
-        nav_to('dashboard')
+    except Exception as e:
+        st.error(f"Error loading report: {str(e)}")
+    finally:
+        session.close()
 
 # Upgrade page
 def show_upgrade_page():
@@ -580,22 +677,27 @@ def show_upgrade_page():
             # Here we would integrate with Stripe for payment
             # For now, simulate an upgrade
             session = Session()
-            user = session.query(User).filter_by(id=st.session_state.user_id).first()
-            if user:
-                user.is_premium = True
-                user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
-                session.commit()
+            try:
+                user = session.query(User).filter_by(id=st.session_state.user_id).first()
+                if user:
+                    user.is_premium = True
+                    user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
+                    session.commit()
 
-                # Update session state
-                st.session_state.is_premium = True
-                st.session_state.analyses_remaining = 30 - user.weekly_analyses_count
+                    # Update session state
+                    st.session_state.is_premium = True
+                    st.session_state.analyses_remaining = 30 - user.weekly_analyses_count
 
-                st.success("Upgraded to premium successfully!")
-                st.info("Redirecting to dashboard...")
-                nav_to('dashboard')
-            else:
-                st.error("Failed to upgrade. Please try again.")
-            session.close()
+                    st.success("Upgraded to premium successfully!")
+                    st.info("Redirecting to dashboard...")
+                    nav_to('dashboard')
+                else:
+                    st.error("Failed to upgrade. Please try again.")
+            except Exception as e:
+                session.rollback()
+                st.error(f"Error during upgrade: {str(e)}")
+            finally:
+                session.close()
 
     st.markdown("---")
     st.subheader("Why Upgrade?")
@@ -662,37 +764,38 @@ def show_learn_more():
     if st.button("Return to Home"):
         nav_to('landing')
 
-# Main app logic
-import pandas as pd
-
-# Routing based on session state
-if st.session_state.user_id is None:
-    # Unauthenticated pages
-    if st.session_state.page == 'login':
-        show_login_page()
-    elif st.session_state.page == 'register':
-        show_register_page()
-    elif st.session_state.page == 'learn_more':
-        show_learn_more()
+# Main app logic - Wrapped in try/except to catch any unexpected errors
+try:
+    # Routing based on session state
+    if st.session_state.user_id is None:
+        # Unauthenticated pages
+        if st.session_state.page == 'login':
+            show_login_page()
+        elif st.session_state.page == 'register':
+            show_register_page()
+        elif st.session_state.page == 'learn_more':
+            show_learn_more()
+        else:
+            show_landing_page()
     else:
-        show_landing_page()
-else:
-    # Authenticated pages
-    if st.session_state.page == 'dashboard':
-        show_dashboard()
-    elif st.session_state.page == 'analyze':
-        show_analyze_page()
-    elif st.session_state.page == 'view_report':
-        show_view_report()
-    elif st.session_state.page == 'upgrade':
-        show_upgrade_page()
-    else:
-        show_dashboard()
+        # Authenticated pages
+        if st.session_state.page == 'dashboard':
+            show_dashboard()
+        elif st.session_state.page == 'analyze':
+            show_analyze_page()
+        elif st.session_state.page == 'view_report':
+            show_view_report()
+        elif st.session_state.page == 'upgrade':
+            show_upgrade_page()
+        else:
+            show_dashboard()
 
-# Small footer with logout option
-st.markdown("---")
-col1, col2, col3 = st.columns([2, 1, 1])
-with col3:
-    if st.session_state.user_id is not None:
-        if st.button("Logout"):
-            logout()
+    # Small footer with logout option
+    st.markdown("---")
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col3:
+        if st.session_state.user_id is not None:
+            if st.button("Logout"):
+                logout()
+except Exception as e:
+    st.error(f"An unexpected error occurred: {str(e)}")
