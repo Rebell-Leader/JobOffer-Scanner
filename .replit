@@ -15,14 +15,6 @@ author = "agent"
 task = "workflow.run"
 args = "streamlit"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Flask Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "ApplyWise"
-
 [[workflows.workflow]]
 name = "streamlit"
 author = "agent"
@@ -36,37 +28,7 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "streamlit run app.py"
-waitForPort = 8501
-
-[[workflows.workflow]]
-name = "Flask Server"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python app.py"
 waitForPort = 5000
-
-[[workflows.workflow]]
-name = "ApplyWise"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "streamlit run app.py"
-waitForPort = 8501
 
 [deployment]
 run = ["sh", "-c", "streamlit run app.py"]
@@ -74,7 +36,3 @@ run = ["sh", "-c", "streamlit run app.py"]
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 8501
-externalPort = 3000
