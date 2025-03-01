@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Upgrade to Premium - ApplyWise{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow text-center">
+            <div class="card-header bg-primary text-white">
+                <h3 class="mb-0">Upgrade to Premium</h3>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card mb-4 rounded-3 shadow-sm">
+                            <div class="card-header py-3">
+                                <h4 class="my-0 fw-normal">Free</h4>
+                            </div>
+                            <div class="card-body">
+                                <h1 class="card-title pricing-card-title">$0<small class="text-muted fw-light">/mo</small></h1>
+                                <ul class="list-unstyled mt-3 mb-4">
+                                    <li>3 analyses per week</li>
+                                    <li>Basic job insights</li>
+                                    <li>Company stability analysis</li>
+                                    <li>Salary range estimation</li>
+                                </ul>
+                                <button type="button" class="w-100 btn btn-lg btn-outline-primary" disabled>Current Plan</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card mb-4 rounded-3 shadow-sm border-primary">
+                            <div class="card-header py-3 text-white bg-primary border-primary">
+                                <h4 class="my-0 fw-normal">Premium</h4>
+                            </div>
+                            <div class="card-body">
+                                <h1 class="card-title pricing-card-title">$9<small class="text-muted fw-light">/mo</small></h1>
+                                <ul class="list-unstyled mt-3 mb-4">
+                                    <li><strong>30 analyses per week</strong></li>
+                                    <li>Detailed job insights</li>
+                                    <li>Enhanced company analysis</li>
+                                    <li>Comprehensive salary data</li>
+                                    <li>Priority support</li>
+                                </ul>
+                                <form action="{{ url_for('auth.create_checkout_session') }}" method="POST">
+                                    <button type="submit" class="w-100 btn btn-lg btn-primary">Upgrade Now</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="alert alert-info">
+                            <h4 class="alert-heading">Why Upgrade?</h4>
+                            <p>With our Premium plan, active job seekers can analyze up to 30 job postings per week, giving you a comprehensive understanding of potential employers and positions. Make informed decisions about your career with detailed insights on company stability, competitive salary ranges, and more.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
