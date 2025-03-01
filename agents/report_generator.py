@@ -6,7 +6,13 @@ def generate(state: Dict) -> Dict:
     if state.get("error"):
         return state
 
+    # Get model and progress callback from state
     model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    progress_callback = state.get("progress_callback")
+
+    # Call progress callback if available
+    if progress_callback:
+        progress_callback("report", 90)
 
     try:
         # Get job details from state
@@ -94,6 +100,11 @@ def generate(state: Dict) -> Dict:
             report = report.replace("```markdown", "").replace("```", "")
 
         state["final_report"] = report
+
+        # Call progress callback with completion
+        if progress_callback:
+            progress_callback("report", 100, "Final report generated successfully")
+
     except Exception as e:
         print(f"Report generation error: {str(e)}")
         state["error"] = f"Report generation failed: {str(e)}"

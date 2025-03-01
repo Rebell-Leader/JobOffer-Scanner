@@ -7,6 +7,11 @@ def analyze(state: Dict) -> Dict:
         return state
 
     model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    progress_callback = state.get("progress_callback")
+
+    # Call progress callback if available
+    if progress_callback:
+        progress_callback("company", 50)
 
     try:
         # First try to get company name from manual inputs
@@ -44,6 +49,12 @@ def analyze(state: Dict) -> Dict:
             "stability_analysis": stability_analysis,
             "company_reviews": company_reviews
         }
+
+        # Call progress callback with info
+        if progress_callback:
+            summary = f"Analyzed stability and culture for {company_name}"
+            progress_callback("company", 100, summary)
+
     except Exception as e:
         state["error"] = f"Company analysis failed: {str(e)}"
         print(f"Company analysis error: {str(e)}")

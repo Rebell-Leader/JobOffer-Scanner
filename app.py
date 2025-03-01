@@ -59,6 +59,20 @@ with st.form("job_analysis_form"):
 
 if analyze_submitted:
     if job_description and company_name and job_title and location:
+        # Create a progress container
+        progress_container = st.container()
+
+        with progress_container:
+            st.subheader("Analysis Progress")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            # Set initial status
+            status_text.text("Starting analysis...")
+
+            # Initialize containers for tool findings
+            tool_findings = st.container()
+
         with st.spinner("Analyzing job posting..."):
             from agents.orchestrator import run_analysis
 
@@ -79,17 +93,56 @@ if analyze_submitted:
             else:
                 st.session_state.selected_model = selected_model
 
+            # Update progress - Job analysis stage
+            status_text.text("Analyzing job requirements...")
+            progress_bar.progress(25)
+
+            # Run analysis with progress callbacks
+            def update_progress(stage, progress, stage_info=None):
+                if stage == "job":
+                    status_text.text("Extracting job requirements...")
+                    progress_bar.progress(25)
+                elif stage == "company":
+                    status_text.text("Researching company information...")
+                    progress_bar.progress(50)
+                    if stage_info:
+                        with tool_findings:
+                            st.info(f"**Company Research:** {stage_info}")
+                elif stage == "salary":
+                    status_text.text("Analyzing compensation and cost of living...")
+                    progress_bar.progress(75)
+                    if stage_info:
+                        with tool_findings:
+                            st.info(f"**Salary Analysis:** {stage_info}")
+                elif stage == "report":
+                    status_text.text("Generating final recommendation...")
+                    progress_bar.progress(100)
+
             # Run analysis
-            result = run_analysis(job_description, job_data, selected_model)
+            result = run_analysis(job_description, job_data, selected_model, progress_callback=update_progress)
 
             if result.get("error"):
                 st.error(f"Analysis failed: {result['error']}")
             else:
+                # Final progress update
+                status_text.text("Analysis completed!")
+                progress_bar.progress(100)
+
                 st.success("Analysis completed!")
 
                 # Display results in expandable sections
                 with st.expander("🎯 Job Analysis", expanded=True):
                     st.write(result["job_details"])
+
+                    # Display skills found
+                    requirements = result["job_details"].get("requirements_analysis", {})
+                    if requirements:
+                        st.subheader("Key Skills Required")
+                        tech_skills = requirements.get("technical_skills", [])
+                        if tech_skills:
+                            st.write("Technical Skills:")
+                            for skill in tech_skills:
+                                st.write(f"- {skill}")
 
                 with st.expander("🏢 Company Research", expanded=True):
                     st.write(result["company_analysis"])

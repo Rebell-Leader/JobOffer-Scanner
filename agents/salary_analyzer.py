@@ -5,6 +5,14 @@ def analyze(state: Dict) -> Dict:
     if state.get("error"):
         return state
 
+    # Get model and progress callback from state
+    model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    progress_callback = state.get("progress_callback")
+
+    # Call progress callback if available
+    if progress_callback:
+        progress_callback("salary", 75)
+
     try:
         job_details = state.get("job_details", {})
         extracted_details = job_details.get("extracted_details", {})
@@ -48,12 +56,19 @@ def analyze(state: Dict) -> Dict:
         salary_range = salary_tools[0].func(
             job_title=job_title,
             location=location,
-            experience_level=experience_level
+            experience_level=experience_level,
+            model=model  # Pass the model explicitly
         )
 
         state["salary_analysis"] = {
             "estimated_range": salary_range
         }
+
+        # Call progress callback with info
+        if progress_callback:
+            summary = f"Analyzed salary range for {job_title} in {location}"
+            progress_callback("salary", 100, summary)
+
     except Exception as e:
         state["error"] = f"Salary analysis failed: {str(e)}"
         print(f"Salary analysis error: {str(e)}")

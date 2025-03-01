@@ -6,6 +6,7 @@ def analyze(state: Dict) -> Dict:
     job_posting = state.get("job_posting", "")
     manual_inputs = state.get("manual_inputs", {})
     model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    progress_callback = state.get("progress_callback")
 
     try:
         # If manual inputs are provided, use them directly
@@ -29,6 +30,14 @@ def analyze(state: Dict) -> Dict:
                 "extracted_details": job_details,
                 "requirements_analysis": requirements_analysis
             }
+
+        # Call the progress callback if provided
+        if progress_callback:
+            # Format requirements for display
+            tech_skills = state["job_details"].get("requirements_analysis", {}).get("technical_skills", [])
+            skills_summary = f"Found {len(tech_skills)} required technical skills"
+            progress_callback("job", 25, skills_summary)
+
     except Exception as e:
         state["error"] = f"Job analysis failed: {str(e)}"
 
