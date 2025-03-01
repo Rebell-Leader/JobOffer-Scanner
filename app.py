@@ -1,4 +1,5 @@
 import streamlit as st
+from agents.orchestrator import run_analysis
 
 # Page config
 st.set_page_config(
@@ -13,6 +14,14 @@ st.write("Analyze job postings with AI-powered insights")
 
 # Main form
 with st.form("job_analysis_form"):
+    # Model selection
+    model_choice = st.radio(
+        "Select analysis model:",
+        ["Fast (Qwen2.5-72B)", "Detailed (DeepSeek-R1)"],
+        index=0,  # Default to the faster model
+        help="Choose between faster results or more detailed analysis"
+    )
+
     # Basic job details
     col1, col2 = st.columns(2)
 
@@ -61,8 +70,17 @@ if analyze_submitted:
                 "compensation": compensation
             }
 
+            # Set the model based on user selection
+            selected_model = "deepseek-ai/DeepSeek-R1" if "Detailed" in model_choice else "Qwen/Qwen2.5-72B-Instruct"
+
+            # Store the model selection in session state
+            if "selected_model" not in st.session_state:
+                st.session_state.selected_model = selected_model
+            else:
+                st.session_state.selected_model = selected_model
+
             # Run analysis
-            result = run_analysis(job_description, job_data)
+            result = run_analysis(job_description, job_data, selected_model)
 
             if result.get("error"):
                 st.error(f"Analysis failed: {result['error']}")

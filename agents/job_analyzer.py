@@ -1,9 +1,11 @@
 from tools.job_tools import job_tools
 from typing import Dict
+from utils.llm import get_completion
 
 def analyze(state: Dict) -> Dict:
     job_posting = state.get("job_posting", "")
     manual_inputs = state.get("manual_inputs", {})
+    model = state.get("model", "deepseek-ai/DeepSeek-R1")
 
     try:
         # If manual inputs are provided, use them directly
@@ -13,15 +15,15 @@ def analyze(state: Dict) -> Dict:
             # Create a structured job details object
             job_details = {
                 "extracted_details": manual_inputs,
-                "requirements_analysis": job_tools[1].func(job_posting)
+                "requirements_analysis": job_tools[1].func(job_posting, model)
             }
 
             state["job_details"] = job_details
         else:
             # Otherwise, use the automatic extraction
             print("Using automatic extraction for job details")
-            job_details = job_tools[0].func(job_posting)
-            requirements_analysis = job_tools[1].func(job_posting)
+            job_details = job_tools[0].func(job_posting, model)
+            requirements_analysis = job_tools[1].func(job_posting, model)
 
             state["job_details"] = {
                 "extracted_details": job_details,

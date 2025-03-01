@@ -7,9 +7,9 @@ import json
 import re
 import logging
 
-def analyze_company_stability(company_name: str) -> str:
+def analyze_company_stability(company_name: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
     """Analyze company stability based on news, layoffs and market data."""
-    cache_key = f"stability_{company_name}"
+    cache_key = f"stability_{company_name}_{model}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return cached_result
@@ -39,7 +39,7 @@ def analyze_company_stability(company_name: str) -> str:
 
     Format as a well-structured markdown report.
     """
-    response = get_completion(prompt)
+    response = get_completion(prompt, model)
     cache.set(cache_key, response)
     return response
 
@@ -116,7 +116,7 @@ def get_company_news(company_name: str) -> str:
         logging.error(f"Error getting company news: {str(e)}")
         return f"Unable to retrieve news data due to an error: {str(e)}"
 
-def get_company_reviews(company_name: str) -> str:
+def get_company_reviews(company_name: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
     """Analyze employee reviews for the company."""
     try:
         # Simulating Glassdoor search
@@ -151,7 +151,7 @@ def get_company_reviews(company_name: str) -> str:
         Format as a well-structured markdown report.
         """
 
-        response = get_completion(prompt)
+        response = get_completion(prompt, model)
         return response
 
     except Exception as e:

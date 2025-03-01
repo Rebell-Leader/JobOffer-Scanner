@@ -5,6 +5,8 @@ def generate(state: Dict) -> Dict:
     if state.get("error"):
         return state
 
+    model = state.get("model", "deepseek-ai/DeepSeek-R1")
+
     try:
         # Get job details from state
         job_details = state.get("job_details", {})
@@ -50,7 +52,7 @@ def generate(state: Dict) -> Dict:
         Use proper markdown formatting throughout.
         """
 
-        report = get_completion(prompt)
+        report = get_completion(prompt, model)
 
         # Ensure the report has proper markdown formatting
         if not report.startswith("#"):

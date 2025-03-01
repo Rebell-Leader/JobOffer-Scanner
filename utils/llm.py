@@ -12,11 +12,11 @@ def get_llm_client() -> OpenAI:
     """Get the OpenAI client instance."""
     return client
 
-def get_completion(prompt: str) -> str:
+def get_completion(prompt: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
     """Get completion from the LLM."""
     try:
         response = client.chat.completions.create(
-            model='deepseek-ai/DeepSeek-R1',
+            model=model,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant specialized in job and company analysis."},
                 {"role": "user", "content": prompt}

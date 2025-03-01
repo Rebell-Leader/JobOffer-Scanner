@@ -4,9 +4,9 @@ from utils.cache import cache
 import json
 import logging
 
-def extract_job_details(job_posting: str) -> dict:
+def extract_job_details(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1") -> dict:
     """Extract key details from a job posting."""
-    cache_key = f"job_details_{hash(job_posting)}"
+    cache_key = f"job_details_{hash(job_posting)}_{model}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return cached_result
@@ -37,7 +37,7 @@ def extract_job_details(job_posting: str) -> dict:
     Ensure the company_name field is never empty and matches exactly as written in the text.
     """
     try:
-        response = get_completion(prompt)
+        response = get_completion(prompt, model)
         print(f"LLM Response: {response}")  # Debug logging
 
         if isinstance(response, str):
@@ -87,7 +87,7 @@ def extract_job_details(job_posting: str) -> dict:
             "responsibilities": []
         }
 
-def analyze_requirements(job_posting: str) -> dict:
+def analyze_requirements(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1") -> dict:
     """Analyze job requirements and provide insights."""
     prompt = f"""
     Analyze the requirements and qualifications in this job posting:
@@ -104,7 +104,7 @@ def analyze_requirements(job_posting: str) -> dict:
     }}
     """
     try:
-        response = get_completion(prompt)
+        response = get_completion(prompt, model)
         if isinstance(response, str):
             return json.loads(response)
         return response

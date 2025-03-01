@@ -7,8 +7,8 @@ import json
 import re
 import logging
 
-def estimate_salary_range(job_title, location, experience_level):
-    cache_key = f"salary_{job_title}_{location}_{experience_level}"
+def estimate_salary_range(job_title, location, experience_level, model="deepseek-ai/DeepSeek-R1"):
+    cache_key = f"salary_{job_title}_{location}_{experience_level}_{model}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return cached_result
@@ -41,7 +41,7 @@ def estimate_salary_range(job_title, location, experience_level):
 
     Format as a well-structured markdown report with clear sections.
     """
-    response = get_completion(prompt)
+    response = get_completion(prompt, model)
     cache.set(cache_key, response)
     return response
 
@@ -123,7 +123,7 @@ def get_cost_of_living_data(location):
         logging.error(f"Error getting cost of living data: {str(e)}")
         return f"Unable to retrieve cost of living data due to an error: {str(e)}"
 
-def analyze_compensation_package(salary_details):
+def analyze_compensation_package(salary_details, model="deepseek-ai/DeepSeek-R1"):
     """Analyze the full compensation package including benefits."""
     prompt = f"""
     Analyze the full compensation package including:
@@ -147,7 +147,7 @@ def analyze_compensation_package(salary_details):
 
     Format as a well-structured markdown report with clear sections.
     """
-    response = get_completion(prompt)
+    response = get_completion(prompt, model)
     return response
 
 # Helper functions

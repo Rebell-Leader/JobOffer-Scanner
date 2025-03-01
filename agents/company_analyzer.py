@@ -1,9 +1,12 @@
 from tools.company_tools import company_tools
 from typing import Dict
+from utils.llm import get_completion
 
 def analyze(state: Dict) -> Dict:
     if state.get("error"):
         return state
+
+    model = state.get("model", "deepseek-ai/DeepSeek-R1")
 
     try:
         # First try to get company name from manual inputs
@@ -34,8 +37,8 @@ def analyze(state: Dict) -> Dict:
             raise ValueError("Company name could not be extracted from job details")
 
         print(f"Analyzing company: {company_name}")
-        stability_analysis = company_tools[0].func(company_name)
-        company_reviews = company_tools[1].func(company_name)
+        stability_analysis = company_tools[0].func(company_name, model)
+        company_reviews = company_tools[1].func(company_name, model)
 
         state["company_analysis"] = {
             "stability_analysis": stability_analysis,
