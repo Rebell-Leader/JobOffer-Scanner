@@ -7,7 +7,7 @@ def generate(state: Dict) -> Dict:
         return state
 
     # Get model and progress callback from state
-    model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    model = state.get("model", "deepseek-ai/DeepSeek-R1-0528")
     progress_callback = state.get("progress_callback")
 
     # Call progress callback if available

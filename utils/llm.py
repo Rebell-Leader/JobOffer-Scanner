@@ -5,7 +5,8 @@ import os
 # Initialize OpenAI client with Featherless API
 client = OpenAI(
     base_url="https://api.featherless.ai/v1",
-    api_key=os.getenv("FEATHERLESS_API_KEY")  # Get from environment variable
+    api_key=os.getenv("FEATHERLESS_API_KEY"),
+    timeout=30.0  # Add timeout to prevent hanging
 )
 
 def get_llm_client() -> OpenAI:

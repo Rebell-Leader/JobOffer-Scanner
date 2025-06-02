@@ -32,7 +32,7 @@ def create_analysis_graph():
 
     return workflow.compile()
 
-def run_analysis(job_posting: str, manual_inputs: Optional[dict] = None, model: str = "deepseek-ai/DeepSeek-R1", progress_callback: Optional[Callable] = None) -> dict:
+def run_analysis(job_posting: str, manual_inputs: Optional[dict] = None, model: str = "deepseek-ai/DeepSeek-R1-0528", progress_callback: Optional[Callable] = None) -> dict:
     graph = create_analysis_graph()
 
     initial_state = JobAnalysisState(
