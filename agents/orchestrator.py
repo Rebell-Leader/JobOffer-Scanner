@@ -57,13 +57,13 @@ def run_analysis(job_posting: str, manual_inputs: Optional[dict] = None, model: 
         })
         return result
     except Exception as e:
-        return JobAnalysisState(
-            job_details={},
-            company_analysis={},
-            salary_analysis={},
-            final_report="",
-            error=str(e),
-            manual_inputs=manual_inputs,
-            model=model,
-            progress_callback=None
-        )
+        return {
+            "job_details": {},
+            "company_analysis": {},
+            "salary_analysis": {},
+            "final_report": "",
+            "error": str(e),
+            "manual_inputs": manual_inputs,
+            "model": model,
+            "progress_callback": None
+        }

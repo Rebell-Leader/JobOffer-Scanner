@@ -110,8 +110,12 @@ def generate(state: Dict) -> Dict:
         state["error"] = f"Report generation failed: {str(e)}"
 
         # Provide a basic report as fallback
+        fallback_company = extracted_details.get('company_name', 'Not specified') if 'extracted_details' in locals() else 'Not specified'
+        fallback_title = extracted_details.get('job_title', 'Not specified') if 'extracted_details' in locals() else 'Not specified'
+        fallback_location = extracted_details.get('location', 'Not specified') if 'extracted_details' in locals() else 'Not specified'
+        
         state["final_report"] = f"""
-        # Job Analysis Report: {job_title} at {company_name}
+        # Job Analysis Report: {fallback_title} at {fallback_company}
 
         ## Executive Summary
 
@@ -119,9 +123,9 @@ def generate(state: Dict) -> Dict:
 
         ## Basic Information
 
-        - **Company:** {extracted_details.get('company_name', 'Not specified')}
-        - **Position:** {extracted_details.get('job_title', 'Not specified')}
-        - **Location:** {extracted_details.get('location', 'Not specified')}
+        - **Company:** {fallback_company}
+        - **Position:** {fallback_title}
+        - **Location:** {fallback_location}
 
         Please try again or contact support if this issue persists.
         """
