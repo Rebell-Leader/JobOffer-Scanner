@@ -7,7 +7,7 @@ import json
 import re
 import logging
 
-def analyze_company_stability(company_name: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
+def analyze_company_stability(company_name: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> str:
     """Analyze company stability based on news, layoffs and market data."""
     cache_key = f"stability_{company_name}_{model}"
     cached_result = cache.get(cache_key)
@@ -68,7 +68,7 @@ def get_company_news(company_name: str) -> str:
         logging.error(f"Error getting company news: {str(e)}")
         return f"Unable to retrieve recent news about {company_name}."
 
-def get_company_reviews(company_name: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
+def get_company_reviews(company_name: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> str:
     """Analyze employee reviews for the company."""
     try:
         # Use LLM to provide a simulated review analysis

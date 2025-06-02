@@ -85,7 +85,7 @@ if analyze_submitted:
             }
 
             # Set the model based on user selection
-            selected_model = "deepseek-ai/DeepSeek-R1" if "Detailed" in model_choice else "Qwen/Qwen2.5-72B-Instruct"
+            selected_model = "deepseek-ai/DeepSeek-R1-0528" if "Detailed" in model_choice else "Qwen/Qwen3-32B"
 
             # Store the model selection in session state
             if "selected_model" not in st.session_state:

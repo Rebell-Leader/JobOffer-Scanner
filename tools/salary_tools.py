@@ -7,7 +7,7 @@ import json
 import re
 import logging
 
-def estimate_salary_range(job_title, location, experience_level, model="deepseek-ai/DeepSeek-R1"):
+def estimate_salary_range(job_title, location, experience_level, model="deepseek-ai/DeepSeek-R1-0528"):
     print(f"Estimating salary for - Title: {job_title}, Location: {location}, Experience: {experience_level}")
 
     cache_key = f"salary_{job_title}_{location}_{experience_level}_{model}"
@@ -140,7 +140,7 @@ def get_cost_of_living_data(location):
         logging.error(f"Error getting cost of living data: {str(e)}")
         return f"Unable to retrieve cost of living data for {location} due to an error. Proceeding with approximations."
 
-def analyze_compensation_package(salary_details, model="deepseek-ai/DeepSeek-R1"):
+def analyze_compensation_package(salary_details, model="deepseek-ai/DeepSeek-R1-0528"):
     """Analyze the full compensation package including benefits."""
     prompt = f"""
     Analyze the full compensation package including:

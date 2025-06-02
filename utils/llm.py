@@ -5,14 +5,14 @@ import os
 # Initialize OpenAI client with Featherless API
 client = OpenAI(
     base_url="https://api.featherless.ai/v1",
-    api_key=os.getenv("OPENAI_API_KEY")  # Get from environment variable
+    api_key=os.getenv("FEATHERLESS_API_KEY")  # Get from environment variable
 )
 
 def get_llm_client() -> OpenAI:
     """Get the OpenAI client instance."""
     return client
 
-def get_completion(prompt: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
+def get_completion(prompt: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> str:
     """Get completion from the LLM."""
     try:
         response = client.chat.completions.create(
@@ -26,7 +26,8 @@ def get_completion(prompt: str, model: str = "deepseek-ai/DeepSeek-R1") -> str:
         )
         # Extract the text content from the response
         content = response.choices[0].message.content
-        return content
+        return content or ""
     except Exception as e:
         print(f"Error getting LLM completion: {str(e)}")
-        return ""  # Return empty string on error to maintain dict structure
+        # Return an error message that explains the issue
+        return f"## Analysis Error\n\nUnable to complete analysis due to API connectivity issue. Please verify your API configuration."

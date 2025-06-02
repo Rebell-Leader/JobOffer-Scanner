@@ -4,7 +4,7 @@ from utils.cache import cache
 import json
 import logging
 
-def extract_job_details(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1") -> dict:
+def extract_job_details(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> dict:
     """Extract key details from a job posting."""
     cache_key = f"job_details_{hash(job_posting)}_{model}"
     cached_result = cache.get(cache_key)
@@ -134,7 +134,7 @@ def extract_job_details(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1"
             "responsibilities": []
         }
 
-def analyze_requirements(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1") -> dict:
+def analyze_requirements(job_posting: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> dict:
     """Analyze job requirements and provide insights."""
     cache_key = f"requirements_{hash(job_posting)}_{model}"
     cached_result = cache.get(cache_key)
