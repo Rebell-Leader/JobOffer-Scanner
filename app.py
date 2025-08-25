@@ -1,5 +1,6 @@
 import streamlit as st
 from agents.orchestrator import run_analysis
+from utils.config import check_environment_setup, print_environment_status
 
 # Page config
 st.set_page_config(
@@ -8,9 +9,19 @@ st.set_page_config(
     layout="wide"
 )
 
+# Print environment status to console for debugging
+print_environment_status()
+
 # Title and description
 st.title("AI Job Analysis Platform")
 st.write("Analyze job postings with AI-powered insights")
+
+# Show demo mode status
+env_status = check_environment_setup()
+if env_status["demo_mode"]:
+    st.info("🔄 **Demo Mode**: Using simulated data for analysis. Add API keys to `.env` for real data integration.")
+else:
+    st.success("🚀 **Production Mode**: Using real API endpoints for analysis.")
 
 # Main form
 with st.form("job_analysis_form"):
