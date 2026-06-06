@@ -76,6 +76,63 @@ def fetch_company_news(company_name: str) -> Optional[str]:
 # Layoffs (optional JSON dataset; layoffs.fyi has no official API)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Cost-of-living dataset
+# ---------------------------------------------------------------------------
+
+def _format_col(record: dict, city: str) -> str:
+    """Render a cost-of-living dataset record into a compact briefing."""
+
+    def _fmt(key: str, label: str, unit: str = "") -> Optional[str]:
+        val = record.get(key)
+        if val is None:
+            return None
+        return f"- {label}: {val}{unit}"
+
+    lines = [f"REAL DATA (cost-of-living dataset) for {city}:"]
+    for key, label, unit in [
+        ("cost_of_living_index", "Cost-of-living index (NYC=100)", ""),
+        ("rent_index", "Rent index (NYC=100)", ""),
+        ("groceries_index", "Groceries index", ""),
+        ("local_purchasing_power", "Local purchasing power", ""),
+        ("monthly_rent_1bedroom_city_center", "1BR rent (city center)", " /mo"),
+        ("monthly_rent_3bedroom_city_center", "3BR rent (city center)", " /mo"),
+        ("meal_inexpensive_restaurant", "Meal (inexpensive)", ""),
+    ]:
+        line = _fmt(key, label, unit)
+        if line:
+            lines.append(line)
+    return "\n".join(lines) if len(lines) > 1 else f"No COL record found for {city}."
+
+
+def fetch_cost_of_living(city: str) -> Optional[str]:
+    """Fetch a city's COL record from ``COL_DATASET_URL`` if configured.
+
+    The dataset can be either a JSON list of records or an object with a
+    ``cities`` array. Each record needs a ``city`` field; any of the keys in
+    ``_format_col`` are surfaced when present. Honest fallback (``None``) when
+    no dataset URL is set or the city isn't in the dataset.
+    """
+    url = os.getenv("COL_DATASET_URL")
+    if not url or not city:
+        return None
+    try:
+        resp = requests.get(url, timeout=_HTTP_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        records = data if isinstance(data, list) else data.get("cities") or data.get("records") or []
+        match = next(
+            (r for r in records if city.lower() in str(r.get("city", "")).lower()),
+            None,
+        )
+        if match is None:
+            return None
+        return _format_col(match, city)
+    except Exception as exc:  # noqa: BLE001 - degrade to heuristic fallback
+        logger.warning("COL fetch failed for %s: %s", city, exc)
+        return None
+
+
 def _format_layoffs(records: list, company_name: str) -> str:
     matches = [
         r for r in records

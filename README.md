@@ -80,13 +80,26 @@ returns sample data — never silently. See `.env.example`.
 - ✅ 59 unit tests total (23 new for reset/change-password, Adzuna summary,
   Telegram parsing/chunking/formatting/handler logic).
 
+### Phase 5 (shipped)
+- ✅ **Real cost-of-living data** via configurable `COL_DATASET_URL` — same
+  pluggable pattern as layoffs; degrades to labelled-ESTIMATE heuristic when
+  unconfigured
+- ✅ **Salary cache-key bug fix** — cache key now includes which data sources
+  contributed, so configuring Adzuna/COL after a heuristic-only run no
+  longer serves stale heuristic output. Covered by a regression test.
+- ✅ **Alembic migrations** — `alembic upgrade head` produces the same schema
+  as `create_all`. Opt in with `USE_ALEMBIC=1` for migration-managed
+  deployments; zero-config setups still use `create_all`. Test runs the
+  real migration against a temp SQLite and asserts every table exists.
+- ✅ **Application export** — Download buttons in My Applications for CSV
+  (pinned column order) and JSON (full backup including `analysis_json`).
+  User-scoped: one account never sees another's rows.
+- ✅ 68 unit tests total (9 new for Phase 5).
+
 ### Honest Gaps (next)
-- 🔄 Cost-of-living figures still come from internal heuristics (labelled
-  ESTIMATE); a real COL data source remains to be wired
 - ❌ No async job queue for large workloads (still in-process)
 - ❌ JS-heavy job boards (LinkedIn / Indeed / Glassdoor) need a real headless
   scraper; the generic URL ingest is best-effort only
-- ❌ Schema migrations are `create_all`-only; Alembic comes when fields evolve
 - ❌ Email delivery for reset tokens not bundled — by design (pluggable)
 
 ## 🎯 Roadmap: Production-Ready Features

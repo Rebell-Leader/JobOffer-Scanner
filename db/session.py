@@ -51,11 +51,20 @@ def get_engine() -> Engine:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist. Safe to call repeatedly."""
+    """Initialize the schema. Safe to call repeatedly.
+
+    By default uses ``Base.metadata.create_all`` for zero-config setups
+    (SQLite, first run). Set ``USE_ALEMBIC=1`` in environments where you've
+    adopted the migrations under ``migrations/`` — then this just no-ops and
+    expects the operator to have run ``alembic upgrade head``.
+    """
     global _initialized
     if _initialized:
         return
-    Base.metadata.create_all(get_engine())
+    if os.getenv("USE_ALEMBIC") == "1":
+        logger.info("USE_ALEMBIC=1 — skipping create_all; run `alembic upgrade head`.")
+    else:
+        Base.metadata.create_all(get_engine())
     _initialized = True
 
 

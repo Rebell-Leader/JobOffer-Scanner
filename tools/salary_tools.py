@@ -20,7 +20,7 @@ try:
 except ImportError:  # pragma: no cover - older langchain layout
     from langchain.tools import Tool
 
-from tools.data_sources import fetch_salary_benchmark
+from tools.data_sources import fetch_cost_of_living, fetch_salary_benchmark
 from utils.cache import cache
 from utils.llm import get_completion
 
@@ -33,14 +33,22 @@ def estimate_salary_range(job_title, location, experience_level, model="detailed
         f"Experience: {experience_level}"
     )
 
-    cache_key = f"salary_{job_title}_{location}_{experience_level}_{model}"
+    real_benchmark = fetch_salary_benchmark(job_title, location)
+    real_col = fetch_cost_of_living(_extract_city(location))
+    heuristic_salary = _get_heuristic_salary_data(job_title, location, experience_level)
+    heuristic_col = _get_heuristic_cost_of_living(location)
+
+    # Cache key includes WHICH data sources actually contributed, so a previous
+    # heuristic-only result doesn't get served back after the user configures a
+    # real data feed. ``model`` is also included since different models phrase
+    # the report differently.
+    sources_tag = (
+        f"adz={'1' if real_benchmark else '0'}_col={'1' if real_col else '0'}"
+    )
+    cache_key = f"salary_{job_title}_{location}_{experience_level}_{model}_{sources_tag}"
     cached = cache.get(cache_key)
     if cached:
         return cached
-
-    real_benchmark = fetch_salary_benchmark(job_title, location)
-    heuristic_salary = _get_heuristic_salary_data(job_title, location, experience_level)
-    heuristic_col = _get_heuristic_cost_of_living(location)
 
     if real_benchmark:
         salary_block = (
@@ -62,6 +70,17 @@ def estimate_salary_range(job_title, location, experience_level, model="detailed
             "Figures below are heuristic estimates only — label them as ESTIMATE."
         )
 
+    if real_col:
+        col_block = (
+            f"COL dataset (REAL, treat as primary):\n{real_col}\n\n"
+            f"Heuristic COL estimate (cross-check only):\n{heuristic_col}"
+        )
+    else:
+        col_block = (
+            f"Heuristic cost-of-living estimate (internal model, NOT real data "
+            f"— label as ESTIMATE):\n{heuristic_col}"
+        )
+
     prompt = f"""
 Produce a markdown salary analysis for:
 - Job Title: {job_title}
@@ -73,8 +92,8 @@ Produce a markdown salary analysis for:
 Salary signals:
 {salary_block}
 
-Heuristic cost-of-living estimate (internal model, not Numbeo data):
-{heuristic_col}
+Cost-of-living signals:
+{col_block}
 
 In your report:
 1. State up front that figures are heuristic estimates, not benchmarks.
@@ -138,9 +157,17 @@ def _get_heuristic_salary_data(job_title, location, experience_level):
     return json.dumps(data, indent=2)
 
 
+def _extract_city(location):
+    """Take the first comma-separated chunk as the city, falling back to the
+    whole string."""
+    if not location:
+        return ""
+    parts = location.split(",")
+    return parts[0].strip() if parts else location.strip()
+
+
 def _get_heuristic_cost_of_living(location):
-    parts = (location or "").split(",")
-    city = parts[0].strip() if parts else location
+    city = _extract_city(location)
     cost_index = _simulated_cost_index(city)
     rent_index = _simulated_rent_index(city)
 

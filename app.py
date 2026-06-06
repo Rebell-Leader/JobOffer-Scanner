@@ -8,6 +8,8 @@ from db.session import init_db
 from services.applications import (
     ApplicationError,
     delete_application,
+    export_applications_csv,
+    export_applications_json,
     list_applications,
     save_analysis,
     update_status,
@@ -373,6 +375,23 @@ with applications_tab:
         st.write("No saved applications yet. Run an analysis and click **💾 Save analysis**.")
     else:
         st.write(f"You have **{len(records)}** saved application(s).")
+
+        col_csv, col_json = st.columns(2)
+        with col_csv:
+            st.download_button(
+                "⬇️ Export CSV",
+                data=export_applications_csv(st.session_state.user_id),
+                file_name="applications.csv",
+                mime="text/csv",
+            )
+        with col_json:
+            st.download_button(
+                "⬇️ Export JSON (full backup)",
+                data=export_applications_json(st.session_state.user_id),
+                file_name="applications.json",
+                mime="application/json",
+            )
+
         for rec in records:
             light = rec.verdict_light or "yellow"
             light_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(light, "⚪")

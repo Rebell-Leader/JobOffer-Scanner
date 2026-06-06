@@ -7,7 +7,10 @@ so the historical view doesn't need a fresh LLM call to render.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import csv
+import io
+import json
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -138,6 +141,65 @@ def delete_application(user_id: int, application_id: int) -> None:
             raise ApplicationError("Application not found.")
         session.delete(app)
         session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+# CSV columns are pinned and ordered — adding a new field later won't reshuffle
+# the columns of files users have already downloaded.
+_EXPORT_COLUMNS = (
+    "id",
+    "created_at",
+    "updated_at",
+    "company_name",
+    "job_title",
+    "location",
+    "status",
+    "verdict",
+    "verdict_light",
+    "ats_score",
+    "notes",
+)
+
+
+def export_applications_csv(user_id: int) -> str:
+    """Return a CSV string of the user's saved applications (newest first)."""
+    rows = list_applications(user_id)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_EXPORT_COLUMNS)
+    for r in rows:
+        writer.writerow([_csv_value(getattr(r, col)) for col in _EXPORT_COLUMNS])
+    return buf.getvalue()
+
+
+def export_applications_json(user_id: int) -> str:
+    """Return a JSON string of the user's saved applications.
+
+    Includes the full ``analysis_json`` blob so the export is a real backup,
+    not just a summary index.
+    """
+    rows = list_applications(user_id)
+    payload = [_json_record(r) for r in rows]
+    return json.dumps(payload, indent=2, default=str)
+
+
+def _csv_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    return str(value)
+
+
+def _json_record(rec: "ApplicationRecord") -> dict:
+    d = asdict(rec)
+    for k, v in list(d.items()):
+        if isinstance(v, datetime):
+            d[k] = v.isoformat(timespec="seconds")
+    return d
 
 
 def _serializable(value: Any) -> Any:

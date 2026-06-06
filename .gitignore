@@ -67,3 +67,9 @@ user_data/
 *token*
 config.json
 credentials.json
+
+# …but legitimate code that happens to contain those words must be tracked.
+!migrations/versions/*token*
+!tests/**/*token*
+!services/**/*token*
+!db/**/*token*
