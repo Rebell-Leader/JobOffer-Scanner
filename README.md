@@ -96,11 +96,43 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 6 (shipped)
+- ✅ **Browser scraper** (`tools/browser_scraper.py`) for resources whose API
+  is paid/unavailable: headless Playwright rendering of JS job boards
+  (LinkedIn-class) and Numbeo cost-of-living, wired as automatic fallbacks
+  in `url_ingest` and `data_sources`. Optional `[browser]` extra, disabled
+  unless `BROWSER_SCRAPER_ENABLED=1`. Parsers split from the browser so they
+  test offline; price parser handles US (`1,234.56`) and EU (`1.234,56`)
+  number formats.
+- ✅ **Async job queue** (`worker/`, `services/analysis_runner.py`) — Celery +
+  Redis (`[worker]` extra). `submit()` enqueues when a broker is configured,
+  else runs in-process; the interactive UI stays synchronous for live
+  progress. Import-cycle-safe app factory.
+- ✅ **Email delivery** (`services/email.py`, `services/notifications.py`) —
+  SMTP password-reset emails; best-effort (logs + returns False when
+  unconfigured, never breaks the flow). Renders a full link when
+  `APP_BASE_URL` is set, else the raw token.
+- ✅ **Docker** — `Dockerfile` + `docker-compose.yml` bring up web + Celery
+  worker + Redis + Postgres (Telegram bot behind a `bot` profile); app
+  container runs `alembic upgrade head` before serving.
+- ✅ 85 unit tests total (17 new: Numbeo/job HTML parsing, US/EU price
+  parsing, browser fallback wiring, async-runner sync fallback, SMTP send +
+  reset-email rendering).
+
+### Validation note (sandbox networking)
+This repo was built in a host-allowlisted sandbox where only `api.anthropic.com`
+is reachable; every external data host returns a proxy `403 host_not_allowed`.
+Connection code was verified to **attempt real requests and degrade gracefully**
+(e.g. Adzuna correctly routes by country, then returns `None` on the 403);
+**parsing** is verified against real-shaped HTML/JSON fixtures. A live data
+round-trip requires running outside the allowlist (or adding these hosts to it).
+
 ### Honest Gaps (next)
-- ❌ No async job queue for large workloads (still in-process)
-- ❌ JS-heavy job boards (LinkedIn / Indeed / Glassdoor) need a real headless
-  scraper; the generic URL ingest is best-effort only
-- ❌ Email delivery for reset tokens not bundled — by design (pluggable)
+- ❌ layoffs.fyi scraping is fragile (Airtable embed) — dataset-URL path
+  preferred; no robust browser parser yet
+- ❌ Bot/queue integration is available via `submit()` but the Telegram bot
+  still runs analysis inline (fine at low volume)
+- ❌ No rate limiting / abuse protection on auth or analysis endpoints
 
 ## 🎯 Roadmap: Production-Ready Features
 

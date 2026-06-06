@@ -22,6 +22,7 @@ from services.auth import (
     register_user,
     request_password_reset,
 )
+from services.notifications import send_password_reset_email
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
@@ -106,6 +107,8 @@ def render_auth() -> None:
             if st.form_submit_button("Request reset token", type="primary"):
                 token = request_password_reset(email)
                 if token is not None:
+                    # Best-effort email delivery (no-op if SMTP unconfigured).
+                    send_password_reset_email(email, token)
                     # Self-hosted convenience: surface the token so a single
                     # operator can complete the flow without email. Real
                     # multi-tenant deployments must NOT keep this branch.

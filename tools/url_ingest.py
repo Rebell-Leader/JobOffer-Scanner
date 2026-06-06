@@ -64,12 +64,32 @@ def fetch_job_posting(url: str) -> str:
     body = resp.content[:_MAX_BYTES]
     text = _clean_html(body)
     if len(text) < 200:
+        # Likely a JS-rendered shell. Try a headless browser if enabled.
+        browser_text = _try_browser_fallback(url)
+        if browser_text:
+            return browser_text
         raise ValueError(
             f"Fetched page yielded only {len(text)} characters of text — "
             "likely a JS-rendered page (LinkedIn / Indeed / Glassdoor). "
-            "Paste the job description text instead."
+            "Enable the browser scraper (BROWSER_SCRAPER_ENABLED=1) or paste "
+            "the job description text instead."
         )
     return text
+
+
+def _try_browser_fallback(url: str) -> Optional[str]:
+    """Attempt a headless-browser render; return None if unavailable/failed."""
+    try:
+        from tools.browser_scraper import browser_enabled, scrape_job_posting
+    except ImportError:
+        return None
+    if not browser_enabled():
+        return None
+    try:
+        return scrape_job_posting(url)
+    except Exception as exc:  # noqa: BLE001 - fall through to the paste hint
+        logger.warning("Browser fallback failed for %s: %s", url, exc)
+        return None
 
 
 def _clean_html(body: bytes) -> str:

@@ -114,22 +114,38 @@ def fetch_cost_of_living(city: str) -> Optional[str]:
     no dataset URL is set or the city isn't in the dataset.
     """
     url = os.getenv("COL_DATASET_URL")
-    if not url or not city:
+    if url and city:
+        try:
+            resp = requests.get(url, timeout=_HTTP_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            records = data if isinstance(data, list) else data.get("cities") or data.get("records") or []
+            match = next(
+                (r for r in records if city.lower() in str(r.get("city", "")).lower()),
+                None,
+            )
+            if match is not None:
+                return _format_col(match, city)
+        except Exception as exc:  # noqa: BLE001 - degrade to browser/heuristic
+            logger.warning("COL dataset fetch failed for %s: %s", city, exc)
+
+    # No dataset (or city not in it): try the Numbeo browser scraper if enabled.
+    return _try_numbeo_browser(city)
+
+
+def _try_numbeo_browser(city: str) -> Optional[str]:
+    if not city:
         return None
     try:
-        resp = requests.get(url, timeout=_HTTP_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        records = data if isinstance(data, list) else data.get("cities") or data.get("records") or []
-        match = next(
-            (r for r in records if city.lower() in str(r.get("city", "")).lower()),
-            None,
-        )
-        if match is None:
-            return None
-        return _format_col(match, city)
+        from tools.browser_scraper import browser_enabled, scrape_numbeo_col
+    except ImportError:
+        return None
+    if not browser_enabled():
+        return None
+    try:
+        return scrape_numbeo_col(city)
     except Exception as exc:  # noqa: BLE001 - degrade to heuristic fallback
-        logger.warning("COL fetch failed for %s: %s", city, exc)
+        logger.warning("Numbeo browser scrape failed for %s: %s", city, exc)
         return None
 
 
