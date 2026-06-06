@@ -96,6 +96,40 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 9 (shipped) — master CV + project gallery + tailored artifacts
+- ✅ **Master CV** (`db.models.MasterCV`, `services/master_cv.py`) — one per
+  user, stored as raw text plus an optional LLM-derived structured projection
+  (Summary / Skills / Experience / Education / Certifications). Tailoring reads
+  the raw text directly, so a parse step can never drop a fact silently.
+- ✅ **Project gallery** (`db.models.Project`, `services/projects.py`) — many
+  per user, each with title / role / tech / summary / highlights / link. The
+  ``projects_as_text`` renderer prepares them for inclusion in tailoring prompts.
+- ✅ **Tailored CV & cover-letter generation** (`services/tailoring.py`) with
+  hard "tailor, don't invent" enforcement:
+  - A ``NO_FABRICATION_RULES`` block is included verbatim in every generation
+    prompt (tests assert the critical phrases stay there).
+  - Allowed: rephrase, reorder, select, emphasize, match terminology.
+  - Forbidden: invent skills, employers, dates, degrees, quantitative claims,
+    or projects the user doesn't have.
+  - Adjacent-experience framing is explicitly permitted when a requirement
+    isn't met — pretending is not.
+  - User-supplied content (CV + projects) goes through the existing
+    ``wrap_untrusted`` injection-hardening helper.
+- ✅ **ApplicationArtifact** table (`db.models`) versioned per application —
+  multiple drafts accumulate so the user can iterate without losing previous
+  output. Newest-first listing; download as markdown.
+- ✅ **UI**: new "📝 CV & Projects" top-level tab with Master CV + Project
+  gallery sub-tabs (upload PDF/DOCX/TXT or paste, optional structured parse,
+  two-step delete). Per-application "🎯 Tailored artifacts" section with
+  generate buttons, in-place preview, download, and delete.
+- ✅ Alembic migration ``83518f3daa22`` adds ``master_cvs``, ``projects``,
+  ``application_artifacts``.
+- ✅ 140 unit tests total (22 new: CV CRUD with structured-preservation,
+  one-CV-per-user, parse persists, project CRUD + cross-user isolation,
+  ``projects_as_text`` rendering, missing-CV guard on tailoring, **constraint
+  text presence in both prompts**, history accumulation, artifact ownership,
+  preview-mode non-persistence, migration applies cleanly).
+
 ### Phase 8 (shipped) — pipeline tracking + analytics
 - ✅ **Application stage tracker** (`db.models.ApplicationStage`,
   `services/stages.py`) — every milestone (applied, recruiter / phone /

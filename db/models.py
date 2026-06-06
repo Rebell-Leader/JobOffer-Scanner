@@ -58,6 +58,15 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    master_cv: Mapped[Optional["MasterCV"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    projects: Mapped[list["Project"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class PasswordResetToken(Base):
@@ -171,3 +180,86 @@ class ApplicationStage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     application: Mapped["Application"] = relationship(back_populates="stages")
+
+
+# ---------------------------------------------------------------------------
+# Master CV / project gallery / per-application artifacts
+# (tailored CVs + cover letters generated from the user's source-of-truth)
+# ---------------------------------------------------------------------------
+
+class MasterCV(Base):
+    """The user's long-form source-of-truth CV — every tailored output reads
+    from this and is forbidden to add facts it doesn't contain."""
+
+    __tablename__ = "master_cvs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional structured projection (Summary, Skills, Experience, Education,
+    # Certifications) — populated by an LLM parse step the user opts into.
+    structured: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship(back_populates="master_cv")
+
+
+class Project(Base):
+    """One entry in the user's project gallery. Tailored CVs may select +
+    reframe these, but must not invent new ones."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[Optional[str]] = mapped_column(String(255))
+    tech_stack: Mapped[Optional[str]] = mapped_column(String(500))
+    summary: Mapped[Optional[str]] = mapped_column(Text)
+    highlights: Mapped[Optional[list]] = mapped_column(JSON)
+    url: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship(back_populates="projects")
+
+
+# Artifact kinds the system can generate for a saved application.
+ARTIFACT_KINDS = ("tailored_cv", "cover_letter")
+
+
+class ApplicationArtifact(Base):
+    """A generated artifact (tailored CV / cover letter) versioned per
+    application. We keep every version so the user can compare and roll back."""
+
+    __tablename__ = "application_artifacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Denormalized for fast per-user listings and ownership checks.
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Free-form metadata about how it was generated (model, tone, instruction).
+    meta: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_artifacts_app_kind_created", "application_id", "kind", "created_at"),
+    )

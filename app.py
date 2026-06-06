@@ -15,12 +15,34 @@ from services.applications import (
     save_analysis,
     update_status,
 )
+from services.master_cv import (
+    MasterCVError,
+    delete_master_cv,
+    get_master_cv,
+    parse_master_cv,
+    save_master_cv,
+    save_master_cv_from_upload,
+)
+from services.projects import (
+    ProjectError,
+    create_project,
+    delete_project,
+    list_projects,
+    update_project,
+)
 from services.stages import (
     QUICK_ACTIONS,
     StageError,
     add_stage,
     delete_stage,
     list_stages,
+)
+from services.tailoring import (
+    TailoringError,
+    delete_artifact,
+    generate_cover_letter,
+    generate_tailored_cv,
+    list_artifacts,
 )
 from services.auth import (
     AuthError,
@@ -195,8 +217,8 @@ if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.pop(key, None)
     st.rerun()
 
-analyze_tab, applications_tab, analytics_tab = st.tabs(
-    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics"]
+analyze_tab, applications_tab, analytics_tab, cv_tab = st.tabs(
+    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics", "📝 CV & Projects"]
 )
 
 
@@ -661,6 +683,67 @@ with applications_tab:
                             except StageError as exc:
                                 st.error(str(exc))
 
+                # ----- Tailored artifacts (CV / cover letter) -----
+                st.markdown("##### 🎯 Tailored artifacts")
+                master_cv_present = get_master_cv(st.session_state.user_id) is not None
+                if not master_cv_present:
+                    st.caption(
+                        "_Add a master CV in the **📝 CV & Projects** tab to "
+                        "enable tailored CV / cover letter generation. We use "
+                        "only facts from your master CV — nothing is invented._"
+                    )
+                else:
+                    art_col1, art_col2 = st.columns(2)
+                    with art_col1:
+                        if st.button("📄 Generate tailored CV", key=f"gen_cv_{rec.id}"):
+                            with st.spinner("Tailoring CV from your master CV…"):
+                                try:
+                                    art = generate_tailored_cv(
+                                        st.session_state.user_id, rec.id
+                                    )
+                                    st.success(f"Saved tailored CV #{art.id}.")
+                                    st.rerun()
+                                except (TailoringError, MasterCVError) as exc:
+                                    st.error(str(exc))
+                    with art_col2:
+                        if st.button("✉️ Generate cover letter", key=f"gen_cl_{rec.id}"):
+                            with st.spinner("Writing cover letter from your master CV…"):
+                                try:
+                                    art = generate_cover_letter(
+                                        st.session_state.user_id, rec.id
+                                    )
+                                    st.success(f"Saved cover letter #{art.id}.")
+                                    st.rerun()
+                                except (TailoringError, MasterCVError) as exc:
+                                    st.error(str(exc))
+
+                # List existing artifacts (newest first).
+                arts = list_artifacts(st.session_state.user_id, rec.id)
+                if arts:
+                    for a in arts:
+                        icon = "📄" if a.kind == "tailored_cv" else "✉️"
+                        label = "Tailored CV" if a.kind == "tailored_cv" else "Cover letter"
+                        with st.expander(
+                            f"{icon} {label} #{a.id} · {a.created_at.strftime('%Y-%m-%d %H:%M')}"
+                        ):
+                            st.markdown(a.content)
+                            d_col, dl_col = st.columns([1, 4])
+                            with d_col:
+                                if st.button("🗑️", key=f"art_del_{a.id}"):
+                                    try:
+                                        delete_artifact(st.session_state.user_id, a.id)
+                                        st.rerun()
+                                    except TailoringError as exc:
+                                        st.error(str(exc))
+                            with dl_col:
+                                st.download_button(
+                                    "⬇️ Download .md",
+                                    data=a.content,
+                                    file_name=f"{a.kind}_{rec.company_name}_{a.id}.md",
+                                    mime="text/markdown",
+                                    key=f"art_dl_{a.id}",
+                                )
+
                 report = rec.analysis_json.get("final_report")
                 if report:
                     with st.expander("📑 Saved report"):
@@ -774,3 +857,200 @@ with analytics_tab:
         if dash.volume_by_week:
             st.subheader("Applications saved per week")
             st.line_chart(dash.volume_by_week)
+
+
+# ---------------------------------------------------------------------------
+# CV & Projects tab
+# ---------------------------------------------------------------------------
+
+with cv_tab:
+    st.caption(
+        "Your **master CV** and **project gallery** are the source of truth "
+        "for every tailored CV / cover letter we generate. We use only facts "
+        "you've put here — nothing is invented. Update these in one place and "
+        "every application can pull from them."
+    )
+
+    cv_section, proj_section = st.tabs(["📄 Master CV", "🧩 Project gallery"])
+
+    # ----- Master CV ----------------------------------------------------------
+    with cv_section:
+        current_cv = get_master_cv(st.session_state.user_id)
+
+        upload_col, paste_col = st.tabs(["⬆️ Upload (PDF/DOCX/TXT)", "📝 Paste / edit"])
+
+        with upload_col:
+            uploaded = st.file_uploader(
+                "Master CV file",
+                type=["pdf", "docx", "txt", "md"],
+                key="master_cv_upload",
+                label_visibility="collapsed",
+            )
+            if uploaded is not None:
+                if st.button("Save uploaded CV as master", type="primary"):
+                    try:
+                        rec = save_master_cv_from_upload(
+                            st.session_state.user_id,
+                            uploaded.getvalue(),
+                            uploaded.name,
+                        )
+                        st.success(
+                            f"Master CV saved ({len(rec.raw_text)} characters)."
+                        )
+                        st.rerun()
+                    except (MasterCVError, ValueError) as exc:
+                        st.error(str(exc))
+
+        with paste_col:
+            existing = current_cv.raw_text if current_cv else ""
+            with st.form("master_cv_paste"):
+                pasted = st.text_area(
+                    "Master CV text",
+                    value=existing,
+                    height=320,
+                    help=(
+                        "Paste your full long-form CV. The more facts you "
+                        "include (skills, projects, dates, results), the more "
+                        "the tailoring has to work with."
+                    ),
+                )
+                if st.form_submit_button("Save as master CV", type="primary"):
+                    try:
+                        save_master_cv(st.session_state.user_id, pasted)
+                        st.success("Master CV saved.")
+                        st.rerun()
+                    except MasterCVError as exc:
+                        st.error(str(exc))
+
+        if current_cv is not None:
+            st.markdown(
+                f"**Saved master CV** · {len(current_cv.raw_text)} characters · "
+                f"updated {current_cv.updated_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+            parse_col, del_col = st.columns([1, 1])
+            with parse_col:
+                if st.button("🧠 Parse into structured sections (optional)"):
+                    with st.spinner("Asking the model to structure your CV…"):
+                        try:
+                            structured = parse_master_cv(st.session_state.user_id)
+                            st.success("Parsed.")
+                            st.json(structured)
+                        except MasterCVError as exc:
+                            st.error(str(exc))
+            with del_col:
+                armed_key = "del_master_cv_armed"
+                if st.session_state.get(armed_key):
+                    st.warning("Delete your master CV?")
+                    yc, nc = st.columns(2)
+                    if yc.button("Yes, delete", type="primary", key="del_master_yes"):
+                        delete_master_cv(st.session_state.user_id)
+                        st.session_state.pop(armed_key, None)
+                        st.rerun()
+                    if nc.button("Cancel", key="del_master_no"):
+                        st.session_state.pop(armed_key, None)
+                        st.rerun()
+                else:
+                    if st.button("🗑️ Delete master CV"):
+                        st.session_state[armed_key] = True
+                        st.rerun()
+
+            if current_cv.structured:
+                with st.expander("View saved structured projection"):
+                    st.json(current_cv.structured)
+        else:
+            st.info(
+                "_No master CV saved yet — upload or paste above to enable "
+                "tailored CV / cover letter generation._"
+            )
+
+    # ----- Project gallery ----------------------------------------------------
+    with proj_section:
+        projects = list_projects(st.session_state.user_id)
+        st.caption(
+            f"{len(projects)} project(s) in your gallery. Tailored CVs may "
+            "select and reframe these for relevance — they will not invent new ones."
+        )
+
+        with st.expander("➕ Add a project"):
+            with st.form("add_project_form"):
+                p_title = st.text_input("Title")
+                p_role = st.text_input("Your role (optional)")
+                p_tech = st.text_input("Tech stack (optional, comma-separated)")
+                p_summary = st.text_area("Summary (1-2 sentences)")
+                p_highlights = st.text_area(
+                    "Highlights (one bullet per line)",
+                    help="Concrete achievements — what you built, what changed, scale.",
+                )
+                p_url = st.text_input("Link (optional)")
+                if st.form_submit_button("Add to gallery", type="primary"):
+                    try:
+                        create_project(
+                            st.session_state.user_id,
+                            title=p_title,
+                            role=p_role,
+                            tech_stack=p_tech,
+                            summary=p_summary,
+                            highlights=p_highlights,
+                            url=p_url,
+                        )
+                        st.success(f"Added “{p_title}” to your gallery.")
+                        st.rerun()
+                    except ProjectError as exc:
+                        st.error(str(exc))
+
+        for p in projects:
+            with st.expander(f"🧩 {p.title}" + (f" — {p.role}" if p.role else "")):
+                if p.tech_stack:
+                    st.markdown(f"**Tech:** {p.tech_stack}")
+                if p.summary:
+                    st.markdown(p.summary)
+                if p.highlights:
+                    for h in p.highlights:
+                        st.markdown(f"- {h}")
+                if p.url:
+                    st.markdown(f"🔗 [{p.url}]({p.url})")
+
+                with st.form(f"edit_project_{p.id}"):
+                    st.markdown("**Edit**")
+                    new_title = st.text_input("Title", value=p.title, key=f"pt_{p.id}")
+                    new_role = st.text_input("Role", value=p.role or "", key=f"pr_{p.id}")
+                    new_tech = st.text_input(
+                        "Tech stack", value=p.tech_stack or "", key=f"pte_{p.id}"
+                    )
+                    new_summary = st.text_area(
+                        "Summary", value=p.summary or "", key=f"ps_{p.id}"
+                    )
+                    new_highlights = st.text_area(
+                        "Highlights (one per line)",
+                        value="\n".join(p.highlights),
+                        key=f"ph_{p.id}",
+                    )
+                    new_url = st.text_input("Link", value=p.url or "", key=f"pu_{p.id}")
+                    if st.form_submit_button("Update"):
+                        try:
+                            update_project(
+                                st.session_state.user_id, p.id,
+                                title=new_title, role=new_role,
+                                tech_stack=new_tech, summary=new_summary,
+                                highlights=new_highlights, url=new_url,
+                            )
+                            st.success("Updated.")
+                            st.rerun()
+                        except ProjectError as exc:
+                            st.error(str(exc))
+
+                armed_key = f"del_proj_armed_{p.id}"
+                if st.session_state.get(armed_key):
+                    st.warning("Delete this project?")
+                    yc, nc = st.columns(2)
+                    if yc.button("Yes, delete", type="primary", key=f"dp_yes_{p.id}"):
+                        delete_project(st.session_state.user_id, p.id)
+                        st.session_state.pop(armed_key, None)
+                        st.rerun()
+                    if nc.button("Cancel", key=f"dp_no_{p.id}"):
+                        st.session_state.pop(armed_key, None)
+                        st.rerun()
+                else:
+                    if st.button("🗑️ Delete project", key=f"dp_{p.id}"):
+                        st.session_state[armed_key] = True
+                        st.rerun()
