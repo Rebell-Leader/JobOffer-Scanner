@@ -8,6 +8,7 @@ import streamlit as st
 from agents.orchestrator import run_analysis
 from db.models import APPLICATION_STATUSES
 from db.session import init_db
+from services.analysis_runner import async_enabled
 from services.analytics import compute_dashboard
 from services.applications import (
     ApplicationError,
@@ -17,6 +18,13 @@ from services.applications import (
     list_applications,
     save_analysis,
     update_status,
+)
+from services.background_analysis import (
+    BackgroundAnalysisError,
+    delete as delete_background_analysis,
+    list_for_user as list_background_analyses,
+    refresh_all_pending,
+    submit_background_analysis,
 )
 from services.checkpoint import (
     CHECKPOINT_STAGES,
@@ -431,6 +439,69 @@ with analyze_tab:
         "location are auto-extracted — only fill them below if extraction misses."
     )
 
+    # ----- Background analyses card (auto-refreshing fragment) -------------
+    @st.fragment(run_every="5s")
+    def _render_background_card():
+        """Polls Celery every 5s for the user's pending background analyses.
+
+        Streamlit re-runs only this fragment on the interval — the form below
+        stays stable while pending tasks update. When the user opens a
+        completed task, we hand it off to ``session_state`` so the main script
+        rerun picks it up and renders it via ``render_result``.
+        """
+        if not async_enabled():
+            return  # nothing to show when the queue isn't configured
+        backgrounds = refresh_all_pending(st.session_state.user_id)
+        if not backgrounds:
+            return
+        st.subheader("🛰 Background analyses")
+        for bg in backgrounds:
+            badge = {
+                "PENDING": "⏳ Pending",
+                "STARTED": "🏃 Running",
+                "SUCCESS": "✅ Done",
+                "FAILURE": "❌ Failed",
+                "REVOKED": "🛑 Cancelled",
+            }.get(bg.state, bg.state)
+            with st.container(border=True):
+                cols = st.columns([4, 1, 1, 1])
+                with cols[0]:
+                    st.markdown(f"**{bg.title}** — {badge}")
+                    if bg.inputs_summary:
+                        st.caption(bg.inputs_summary)
+                    if bg.state == "FAILURE" and bg.error_message:
+                        st.error(bg.error_message)
+                    st.caption(
+                        f"Submitted {bg.created_at.strftime('%Y-%m-%d %H:%M')} · "
+                        f"task `{bg.task_id[:12]}…`"
+                    )
+                with cols[1]:
+                    if bg.state == "SUCCESS":
+                        if st.button("Open", key=f"bg_open_{bg.id}"):
+                            st.session_state.last_result = bg.result_json
+                            extracted = (bg.result_json or {}).get("job_details", {}).get("extracted_details", {})
+                            st.session_state.last_inputs = {
+                                "company_name": extracted.get("company_name", ""),
+                                "job_title": extracted.get("job_title", ""),
+                                "location": extracted.get("location", ""),
+                                "compensation": extracted.get("compensation", ""),
+                            }
+                            st.rerun()
+                with cols[2]:
+                    if bg.state not in ("SUCCESS", "FAILURE", "REVOKED"):
+                        st.caption("Auto-refreshing")
+                with cols[3]:
+                    if st.button("🗑️", key=f"bg_del_{bg.id}"):
+                        try:
+                            delete_background_analysis(
+                                st.session_state.user_id, bg.id,
+                            )
+                            st.rerun()
+                        except BackgroundAnalysisError as exc:
+                            st.error(str(exc))
+
+    _render_background_card()
+
     with st.form("job_analysis_form"):
         model_choice = st.radio(
             "Analysis depth",
@@ -481,6 +552,14 @@ with analyze_tab:
                     help="What the posting itself says — leave blank if unspecified.",
                 )
 
+        if async_enabled():
+            run_background = st.checkbox(
+                "Run in background (returns immediately; pick up the result here later)",
+                value=False,
+                key="run_background_checkbox",
+            )
+        else:
+            run_background = False
         analyze_submitted = st.form_submit_button("🔍 Analyze posting", type="primary")
 
     if analyze_submitted:
@@ -552,6 +631,31 @@ with analyze_tab:
                 if stage_info:
                     with tool_findings:
                         st.info(f"**{stage.title()}:** {stage_info}")
+
+            # Background path: enqueue, persist the tracking row, and exit
+            # without blocking. The fragment above will surface the result
+            # whenever Celery says SUCCESS.
+            if run_background:
+                with st.spinner("Submitting to background worker…"):
+                    bg = submit_background_analysis(
+                        st.session_state.user_id,
+                        posting_text,
+                        manual_inputs=job_data,
+                        model=selected_model,
+                        resume_text=resume_text,
+                    )
+                if bg is None:
+                    st.error(
+                        "Background mode requires a configured Celery broker — "
+                        "falling back to inline run."
+                    )
+                else:
+                    st.success(
+                        f"Submitted as background analysis **#{bg.id}**. "
+                        "The card above auto-refreshes; pick the result up "
+                        "any time, including from a different session."
+                    )
+                    st.stop()
 
             # Stable per-(user, inputs) checkpoint key so retrying the same
             # form short-circuits stages that already completed.

@@ -403,3 +403,41 @@ class TelegramLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="telegram_link")
+
+
+# ---------------------------------------------------------------------------
+# Background analyses — long-running pipeline jobs submitted to Celery
+# ---------------------------------------------------------------------------
+
+# Lifecycle states. ``PENDING`` and ``STARTED`` map to live Celery states; the
+# others mirror Celery's terminal states so we can stop polling once written.
+BACKGROUND_STATES = ("PENDING", "STARTED", "SUCCESS", "FAILURE", "REVOKED")
+BACKGROUND_TERMINAL_STATES = {"SUCCESS", "FAILURE", "REVOKED"}
+
+
+class BackgroundAnalysis(Base):
+    """One queued analysis, addressable by ``task_id`` so a user can leave
+    the page and come back later to see the result.
+
+    ``result_json`` is only populated once the task reaches ``SUCCESS`` —
+    until then, callers should poll ``state`` and ask the broker. We cache
+    the terminal state on the row so we stop hammering the broker once the
+    task is done.
+    """
+
+    __tablename__ = "background_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    # Short user-facing summary of the inputs (company / title / location).
+    inputs_summary: Mapped[Optional[str]] = mapped_column(Text)
+    # Full result blob, only set when state == SUCCESS.
+    result_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
