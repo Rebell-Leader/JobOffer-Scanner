@@ -96,6 +96,36 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 10 (shipped) — deterministic constraint-violation detector + tone presets
+- ✅ **Constraint checker** (`services/constraint_check.py`) — runs after every
+  tailored generation. Extracts skill-shaped tokens, years, percentages, and
+  quantitative claims from the output; flags anything not present in the union
+  of master CV + project gallery + job context.
+  - Single-word extraction with character-class boundaries so `C++` / `C#` /
+    `Node.js` / `40%` actually match (the previous `\b` approach silently
+    missed them).
+  - Trailing sentence punctuation stripped so `Python.` matches `Python`.
+  - Multi-word phrase matching deliberately dropped — it falsely flagged
+    routine title text like `Staff ML` because the *phrase* wasn't in the
+    master CV. Individual word matching catches genuine invented skills like
+    `TensorFlow` or `Apache Spark` (both components flagged).
+- ✅ **Auto-check on every generation** — `generate_tailored_cv` and
+  `generate_cover_letter` run the check and persist the result in
+  `artifact.meta.constraint_check`. The UI badges each artifact as ✅ clean or
+  ⚠️ review-recommended and lists the specific terms / years / percentages
+  that warrant a look.
+- ✅ **Re-check button** — `recheck_artifact` re-runs against the *current*
+  master CV + projects so previously-flagged items can clear after a CV
+  update, without regenerating the artifact.
+- ✅ **Cover-letter tone presets** — `COVER_LETTER_TONES = (professional, warm,
+  direct, enthusiastic, concise)`, exposed as a per-application Streamlit
+  selectbox that persists in session state.
+- ✅ 162 unit tests total (22 new: token extraction across punctuation /
+  percentages / quant-claim patterns, clean+flagged+job-context-whitelisting
+  for the checker, serialization round-trip, auto-check-on-generation,
+  re-check end-to-end including master-CV-update clearing, ownership
+  isolation on recheck, tone-preset propagation into the prompt).
+
 ### Phase 9 (shipped) — master CV + project gallery + tailored artifacts
 - ✅ **Master CV** (`db.models.MasterCV`, `services/master_cv.py`) — one per
   user, stored as raw text plus an optional LLM-derived structured projection

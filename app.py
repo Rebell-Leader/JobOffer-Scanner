@@ -37,12 +37,15 @@ from services.stages import (
     delete_stage,
     list_stages,
 )
+from services.constraint_check import ConstraintCheck, summarize as summarize_check
 from services.tailoring import (
+    COVER_LETTER_TONES,
     TailoringError,
     delete_artifact,
     generate_cover_letter,
     generate_tailored_cv,
     list_artifacts,
+    recheck_artifact,
 )
 from services.auth import (
     AuthError,
@@ -706,11 +709,23 @@ with applications_tab:
                                 except (TailoringError, MasterCVError) as exc:
                                     st.error(str(exc))
                     with art_col2:
-                        if st.button("✉️ Generate cover letter", key=f"gen_cl_{rec.id}"):
+                        # Tone preset for cover letters — persists per-application
+                        # in session_state so the user's last choice sticks.
+                        tone_key = f"cl_tone_{rec.id}"
+                        tone = st.selectbox(
+                            "Cover letter tone",
+                            COVER_LETTER_TONES,
+                            index=0,
+                            key=tone_key,
+                            label_visibility="collapsed",
+                        )
+                        if st.button(
+                            f"✉️ Generate cover letter ({tone})", key=f"gen_cl_{rec.id}"
+                        ):
                             with st.spinner("Writing cover letter from your master CV…"):
                                 try:
                                     art = generate_cover_letter(
-                                        st.session_state.user_id, rec.id
+                                        st.session_state.user_id, rec.id, tone=tone
                                     )
                                     st.success(f"Saved cover letter #{art.id}.")
                                     st.rerun()
@@ -723,19 +738,67 @@ with applications_tab:
                     for a in arts:
                         icon = "📄" if a.kind == "tailored_cv" else "✉️"
                         label = "Tailored CV" if a.kind == "tailored_cv" else "Cover letter"
-                        with st.expander(
-                            f"{icon} {label} #{a.id} · {a.created_at.strftime('%Y-%m-%d %H:%M')}"
-                        ):
+                        check = ConstraintCheck.from_dict((a.meta or {}).get("constraint_check"))
+                        check_emoji = "✅" if check.is_clean else "⚠️"
+                        header = (
+                            f"{icon} {label} #{a.id} · "
+                            f"{a.created_at.strftime('%Y-%m-%d %H:%M')} · {check_emoji}"
+                        )
+                        with st.expander(header):
+                            # Constraint-check badge — the whole point of the post-check.
+                            if check.is_clean:
+                                st.success(summarize_check(check))
+                            else:
+                                st.warning(summarize_check(check))
+                                bits = []
+                                if check.new_proper_nouns:
+                                    bits.append(
+                                        ("**New skill/term tokens not in your master CV / projects:** "
+                                         + ", ".join(f"`{t}`" for t in check.new_proper_nouns))
+                                    )
+                                if check.new_years:
+                                    bits.append(
+                                        "**New years:** " + ", ".join(f"`{y}`" for y in check.new_years)
+                                    )
+                                if check.new_percentages:
+                                    bits.append(
+                                        "**New percentages:** " + ", ".join(
+                                            f"`{p}`" for p in check.new_percentages
+                                        )
+                                    )
+                                if check.new_quantitative_claims:
+                                    bits.append(
+                                        "**New quantitative claims:** " + ", ".join(
+                                            f"`{q}`" for q in check.new_quantitative_claims
+                                        )
+                                    )
+                                for bit in bits:
+                                    st.markdown(bit)
+                                st.caption(
+                                    "False positives are possible (the detector is "
+                                    "case-folded substring matching, not semantic). "
+                                    "If a flagged term is genuinely in your master CV, "
+                                    "edit it there and click **Re-check** below."
+                                )
+
+                            st.markdown("---")
                             st.markdown(a.content)
-                            d_col, dl_col = st.columns([1, 4])
-                            with d_col:
+                            a_btns = st.columns([1, 1, 3])
+                            with a_btns[0]:
                                 if st.button("🗑️", key=f"art_del_{a.id}"):
                                     try:
                                         delete_artifact(st.session_state.user_id, a.id)
                                         st.rerun()
                                     except TailoringError as exc:
                                         st.error(str(exc))
-                            with dl_col:
+                            with a_btns[1]:
+                                if st.button("🔁 Re-check", key=f"art_recheck_{a.id}"):
+                                    try:
+                                        recheck_artifact(st.session_state.user_id, a.id)
+                                        st.rerun()
+                                    except TailoringError as exc:
+                                        st.error(str(exc))
+                            with a_btns[2]:
                                 st.download_button(
                                     "⬇️ Download .md",
                                     data=a.content,

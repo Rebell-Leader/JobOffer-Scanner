@@ -25,10 +25,21 @@ from db.models import (
     ApplicationArtifact,
 )
 from db.session import get_session
+from services.constraint_check import ConstraintCheck, check_tailored_output
 from services.master_cv import MasterCVError, get_master_cv
 from services.projects import projects_as_text
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
+
+
+# Canonical cover-letter tone presets surfaced in the UI.
+COVER_LETTER_TONES = (
+    "professional",
+    "warm",
+    "direct",
+    "enthusiastic",
+    "concise",
+)
 
 
 class TailoringError(ValueError):
@@ -142,7 +153,9 @@ def generate_tailored_cv(
 
     Persists the result as an ``ApplicationArtifact`` of kind ``tailored_cv``.
     Multiple versions accumulate per application — use ``list_artifacts`` to
-    fetch the history.
+    fetch the history. The post-check verifies that the generated output
+    doesn't introduce facts missing from the sources; the result is stored in
+    ``meta.constraint_check``.
     """
     cv_raw, projects_text = _load_sources_or_raise(user_id)
     app = _application_for(user_id, application_id)
@@ -155,9 +168,14 @@ def generate_tailored_cv(
         user_instructions=user_instructions,
     )
     content = get_completion(prompt, model)
+    check = check_tailored_output(cv_raw, projects_text, content, job_context)
     return _persist_artifact_if_requested(
         user_id, application_id, "tailored_cv", content,
-        meta={"model": model, "instructions": user_instructions},
+        meta={
+            "model": model,
+            "instructions": user_instructions,
+            "constraint_check": check.to_dict(),
+        },
         persist=persist,
     )
 
@@ -170,7 +188,12 @@ def generate_cover_letter(
     model: str = "detailed",
     persist: bool = True,
 ) -> ArtifactRecord:
-    """Generate a cover letter for the given saved application."""
+    """Generate a cover letter for the given saved application.
+
+    ``tone`` should be one of ``COVER_LETTER_TONES``; other values are still
+    accepted (passed verbatim to the prompt) so power users can supply their
+    own descriptor.
+    """
     cv_raw, projects_text = _load_sources_or_raise(user_id)
     app = _application_for(user_id, application_id)
     job_context = _job_context(app)
@@ -183,11 +206,42 @@ def generate_cover_letter(
         user_instructions=user_instructions,
     )
     content = get_completion(prompt, model)
+    check = check_tailored_output(cv_raw, projects_text, content, job_context)
     return _persist_artifact_if_requested(
         user_id, application_id, "cover_letter", content,
-        meta={"model": model, "tone": tone, "instructions": user_instructions},
+        meta={
+            "model": model,
+            "tone": tone,
+            "instructions": user_instructions,
+            "constraint_check": check.to_dict(),
+        },
         persist=persist,
     )
+
+
+def recheck_artifact(user_id: int, artifact_id: int) -> ConstraintCheck:
+    """Re-run the post-check against the *current* master CV + projects.
+
+    Useful after the user edits their master CV to add a previously-missing
+    skill — flagged items should now clear without regenerating the artifact.
+    The new result is persisted on the artifact's ``meta.constraint_check``.
+    """
+    with get_session() as session:
+        artifact = session.get(ApplicationArtifact, artifact_id)
+        if artifact is None or artifact.user_id != user_id:
+            raise TailoringError("Artifact not found.")
+        cv = get_master_cv(user_id)
+        cv_raw = cv.raw_text if cv else ""
+        projects_text = projects_as_text(user_id)
+        # Pull the job context from the parent application.
+        app = session.get(Application, artifact.application_id)
+        job_context = _job_context(app) if app else ""
+        check = check_tailored_output(cv_raw, projects_text, artifact.content, job_context)
+        new_meta = dict(artifact.meta or {})
+        new_meta["constraint_check"] = check.to_dict()
+        artifact.meta = new_meta
+        session.commit()
+        return check
 
 
 # ---------------------------------------------------------------------------
