@@ -39,16 +39,33 @@ returns sample data — never silently. See `.env.example`.
 - ✅ **Structured Green / Yellow / Red verdict** with machine-readable JSON
   sidecar and an inference fallback (`utils/verdict.py`); rendered as a
   colored badge above the report
-- ✅ 21 unit tests covering security, data-source formatting, ATS scoring,
-  verdict extraction, URL ingest
 
-### Honest Gaps (Phase 3+)
+### Phase 3 (shipped)
+- ✅ **Persistence layer** — SQLAlchemy models (`User`, `Application`);
+  SQLite by default at `./data/joboffer.db`, drop in `DATABASE_URL` to point
+  at Postgres (`db/`)
+- ✅ **Email/password auth** with bcrypt hashing, normalized emails, identical
+  error messages for unknown-user vs wrong-password (no enumeration leak)
+  (`services/auth.py`)
+- ✅ **Application tracking** — save any analysis to your dashboard, set
+  status (saved / applied / interviewing / offer / rejected / withdrawn),
+  add notes, update, delete, view the historical report without re-running
+  the LLM (`services/applications.py`)
+- ✅ **Streamlit UI**: auth gate, tabbed layout (Analyze / My Applications),
+  Save form with status + notes, per-row update/delete forms
+- ✅ 36 unit tests total (15 new for auth & applications: ownership
+  isolation, password hashing, duplicate detection, callable-stripping)
+
+### Honest Gaps (next)
 - 🔄 Salary & COL figures still come from internal heuristics (labelled
   ESTIMATE), not Glassdoor/Numbeo/levels.fyi
-- ❌ No persistence, auth, or application tracking — every analysis is one-shot
 - ❌ No async job queue for large workloads (still in-process)
 - ❌ JS-heavy job boards (LinkedIn / Indeed / Glassdoor) need a real headless
   scraper; the generic URL ingest is best-effort only
+- ❌ No CI yet — tests pass locally but aren't enforced on PR
+- ❌ Schema migrations are `create_all`-only; Alembic comes when fields evolve
+- ❌ No password reset / email verification flow — minimal auth only
+- ❌ Telegram bot channel from the original vision doc not built
 
 ## 🎯 Roadmap: Production-Ready Features
 

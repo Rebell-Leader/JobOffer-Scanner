@@ -1,6 +1,16 @@
 import streamlit as st
 
 from agents.orchestrator import run_analysis
+from db.models import APPLICATION_STATUSES
+from db.session import init_db
+from services.applications import (
+    ApplicationError,
+    delete_application,
+    list_applications,
+    save_analysis,
+    update_status,
+)
+from services.auth import AuthError, authenticate_user, register_user
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
@@ -8,11 +18,10 @@ from utils.config import check_environment_setup, print_environment_status
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
 
-# Print environment status to console for debugging
 print_environment_status()
+init_db()
 
 st.title("AI Job Analysis Platform")
-st.write("Analyze job postings with AI-powered insights")
 
 env_status = check_environment_setup()
 if env_status["demo_mode"]:
@@ -23,90 +32,193 @@ if env_status["demo_mode"]:
         "(see `.env.example`) to enable real analysis."
     )
 else:
-    st.success(
-        f"🚀 **Production Mode**: Live analysis via **{env_status['llm_provider']}**."
-    )
+    st.success(f"🚀 **Production Mode**: Live analysis via **{env_status['llm_provider']}**.")
 
 
 # ---------------------------------------------------------------------------
-# Form
+# Auth gate
 # ---------------------------------------------------------------------------
 
-with st.form("job_analysis_form"):
-    model_choice = st.radio(
-        "Select analysis depth:",
-        ["Fast", "Detailed"],
-        index=0,
-        help="Fast = quicker, cheaper model. Detailed = deeper reasoning model.",
-    )
+def render_auth() -> None:
+    st.write("Sign in or create an account to save your analyses and track applications.")
+    login_tab, register_tab = st.tabs(["Sign in", "Create account"])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        company_name = st.text_input("Company Name*", help="Enter the company name")
-        job_title = st.text_input("Job Title*", help="Enter the position title")
-    with col2:
-        location = st.text_input("Location*", help="Enter job location (city, country)")
-        compensation = st.text_input("Compensation", help="Salary/compensation details (optional)")
+    with login_tab:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.form_submit_button("Sign in", type="primary"):
+                try:
+                    user = authenticate_user(email, password)
+                    st.session_state.user_id = user.id
+                    st.session_state.user_email = user.email
+                    st.rerun()
+                except AuthError as exc:
+                    st.error(str(exc))
 
-    job_url = st.text_input(
-        "Job posting URL (optional)",
-        help=(
-            "If provided, we'll fetch the page and use its text. JS-heavy sites "
-            "(LinkedIn / Indeed / Glassdoor) often won't work — paste below instead."
-        ),
-    )
+    with register_tab:
+        with st.form("register_form"):
+            email = st.text_input("Email", key="register_email")
+            password = st.text_input(
+                "Password",
+                type="password",
+                key="register_password",
+                help="Minimum 8 characters.",
+            )
+            if st.form_submit_button("Create account", type="primary"):
+                try:
+                    user = register_user(email, password)
+                    st.session_state.user_id = user.id
+                    st.session_state.user_email = user.email
+                    st.success("Account created. Signing you in...")
+                    st.rerun()
+                except AuthError as exc:
+                    st.error(str(exc))
 
-    job_description = st.text_area(
-        "Full Job Description*",
-        height=260,
-        help="Paste the complete job posting text here (used if no URL is provided).",
-    )
 
-    resume_file = st.file_uploader(
-        "Resume (optional — PDF, DOCX, or TXT)",
-        type=["pdf", "docx", "txt", "md"],
-        help="Upload a resume to get an ATS keyword-match score and gap analysis.",
-    )
-
-    analyze_submitted = st.form_submit_button("Analyze Job", type="primary")
+if "user_id" not in st.session_state:
+    render_auth()
+    st.stop()
 
 
 # ---------------------------------------------------------------------------
-# Submission handling
+# Authenticated layout
 # ---------------------------------------------------------------------------
 
-if analyze_submitted:
-    # Resolve job posting text from URL or paste.
-    posting_text = job_description or ""
-    if job_url and is_url(job_url):
-        with st.spinner(f"Fetching {job_url} ..."):
+st.sidebar.markdown(f"**Signed in as:** {st.session_state.user_email}")
+if st.sidebar.button("Sign out"):
+    for key in ("user_id", "user_email", "last_result", "last_inputs"):
+        st.session_state.pop(key, None)
+    st.rerun()
+
+st.sidebar.title("About")
+st.sidebar.info(
+    "AI-assisted analysis of job postings: requirements, company signals, "
+    "compensation and cost-of-living context, plus a final recommendation. "
+    "Upload a resume to also get an ATS match score and gap analysis."
+)
+if env_status["demo_mode"]:
+    st.sidebar.warning(
+        "**Demo mode active** — every section below is sample output, not a "
+        "real assessment of your posting."
+    )
+
+analyze_tab, applications_tab = st.tabs(["🔍 Analyze a posting", "📌 My Applications"])
+
+
+# ---------------------------------------------------------------------------
+# Analyze tab
+# ---------------------------------------------------------------------------
+
+def render_result(result: dict) -> None:
+    verdict = result.get("verdict") or {}
+    if verdict:
+        light = verdict.get("light", "yellow")
+        label = verdict.get("verdict", "Consider with Caution")
+        confidence = verdict.get("confidence")
+        badge_text = f"**Verdict:** {label}"
+        if confidence is not None:
+            badge_text += f" · Confidence {confidence}/10"
+        if verdict.get("source") == "inferred":
+            badge_text += " _(inferred — model didn't return structured verdict)_"
+        {"green": st.success, "red": st.error}.get(light, st.warning)(badge_text)
+        for reason in verdict.get("reasons", []) or []:
+            st.write(f"- {reason}")
+
+    with st.expander("🎯 Job Analysis", expanded=True):
+        st.write(result["job_details"])
+        requirements = result["job_details"].get("requirements_analysis", {})
+        tech_skills = requirements.get("technical_skills", []) if isinstance(requirements, dict) else []
+        if tech_skills:
+            st.subheader("Key Skills Required")
+            for skill in tech_skills:
+                st.write(f"- {skill}")
+
+    with st.expander("🏢 Company Research", expanded=True):
+        st.write(result["company_analysis"])
+
+    with st.expander("💰 Compensation Analysis", expanded=True):
+        st.write(result["salary_analysis"])
+
+    resume_analysis = result.get("resume_analysis") or {}
+    if resume_analysis:
+        with st.expander("📄 Resume / ATS Analysis", expanded=True):
+            st.metric("ATS keyword match", f"{resume_analysis.get('ats_score', 0)}/100")
+            col_m, col_g = st.columns(2)
+            with col_m:
+                st.write("**Matched required skills**")
+                for s in resume_analysis.get("matched_skills", []) or ["_none_"]:
+                    st.write(f"- {s}")
+            with col_g:
+                st.write("**Missing required skills**")
+                for s in resume_analysis.get("missing_skills", []) or ["_none_"]:
+                    st.write(f"- {s}")
+            issues = resume_analysis.get("format_issues") or []
+            if issues:
+                st.write("**ATS formatting issues**")
+                for i in issues:
+                    st.write(f"- {i}")
+            st.markdown("---")
+            st.markdown(resume_analysis.get("commentary", ""))
+
+    st.subheader("📑 Final Recommendation")
+    st.markdown(result["final_report"])
+
+
+with analyze_tab:
+    with st.form("job_analysis_form"):
+        model_choice = st.radio(
+            "Select analysis depth:",
+            ["Fast", "Detailed"],
+            index=0,
+            help="Fast = quicker, cheaper model. Detailed = deeper reasoning model.",
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            company_name = st.text_input("Company Name*")
+            job_title = st.text_input("Job Title*")
+        with col2:
+            location = st.text_input("Location*")
+            compensation = st.text_input("Compensation")
+        job_url = st.text_input(
+            "Job posting URL (optional)",
+            help=(
+                "If provided, we'll fetch the page text. JS-heavy sites "
+                "(LinkedIn / Indeed / Glassdoor) often won't work — paste below instead."
+            ),
+        )
+        job_description = st.text_area(
+            "Full Job Description*",
+            height=240,
+            help="Paste the complete job posting text here (used if no URL is provided).",
+        )
+        resume_file = st.file_uploader(
+            "Resume (optional — PDF, DOCX, or TXT)",
+            type=["pdf", "docx", "txt", "md"],
+        )
+        analyze_submitted = st.form_submit_button("Analyze Job", type="primary")
+
+    if analyze_submitted:
+        posting_text = job_description or ""
+        if job_url and is_url(job_url):
+            with st.spinner(f"Fetching {job_url} ..."):
+                try:
+                    posting_text = fetch_job_posting(job_url)
+                    st.success(f"Fetched {len(posting_text)} characters from URL.")
+                except ValueError as exc:
+                    st.error(str(exc))
+                    posting_text = job_description or ""
+
+        resume_text = ""
+        if resume_file is not None:
             try:
-                posting_text = fetch_job_posting(job_url)
-                st.success(f"Fetched {len(posting_text)} characters from URL.")
+                resume_text = extract_resume_text(resume_file.getvalue(), resume_file.name)
+                if not resume_text.strip():
+                    st.warning("Resume parsed but contained no extractable text — skipping ATS.")
             except ValueError as exc:
-                st.error(str(exc))
-                posting_text = job_description or ""
+                st.error(f"Resume parsing failed: {exc}")
 
-    # Parse resume up-front so errors surface before the LLM pipeline starts.
-    resume_text = ""
-    if resume_file is not None:
-        try:
-            resume_text = extract_resume_text(resume_file.getvalue(), resume_file.name)
-            if not resume_text.strip():
-                st.warning("Resume parsed but contained no extractable text — skipping ATS analysis.")
-        except ValueError as exc:
-            st.error(f"Resume parsing failed: {exc}")
-
-    if posting_text and company_name and job_title and location:
-        progress_container = st.container()
-        with progress_container:
-            st.subheader("Analysis Progress")
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text("Starting analysis...")
-            tool_findings = st.container()
-
-        with st.spinner("Analyzing job posting..."):
+        if posting_text and company_name and job_title and location:
             job_data = {
                 "company_name": company_name,
                 "job_title": job_title,
@@ -114,10 +226,12 @@ if analyze_submitted:
                 "compensation": compensation,
             }
             selected_model = "detailed" if "Detailed" in model_choice else "fast"
-            st.session_state.selected_model = selected_model
 
-            status_text.text("Analyzing job requirements...")
-            progress_bar.progress(25)
+            st.subheader("Analysis Progress")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            status_text.text("Starting analysis...")
+            tool_findings = st.container()
 
             def update_progress(stage, progress, stage_info=None):
                 if stage == "job":
@@ -126,32 +240,27 @@ if analyze_submitted:
                 elif stage == "company":
                     status_text.text("Researching company information...")
                     progress_bar.progress(50)
-                    if stage_info:
-                        with tool_findings:
-                            st.info(f"**Company Research:** {stage_info}")
                 elif stage == "salary":
                     status_text.text("Analyzing compensation and cost of living...")
                     progress_bar.progress(75)
-                    if stage_info:
-                        with tool_findings:
-                            st.info(f"**Salary Analysis:** {stage_info}")
                 elif stage == "resume":
                     status_text.text("Running ATS / resume gap analysis...")
                     progress_bar.progress(85)
-                    if stage_info:
-                        with tool_findings:
-                            st.info(f"**Resume:** {stage_info}")
                 elif stage == "report":
                     status_text.text("Generating final recommendation...")
                     progress_bar.progress(100)
+                if stage_info:
+                    with tool_findings:
+                        st.info(f"**{stage.title()}:** {stage_info}")
 
-            result = run_analysis(
-                posting_text,
-                job_data,
-                selected_model,
-                progress_callback=update_progress,
-                resume_text=resume_text,
-            )
+            with st.spinner("Analyzing job posting..."):
+                result = run_analysis(
+                    posting_text,
+                    job_data,
+                    selected_model,
+                    progress_callback=update_progress,
+                    resume_text=resume_text,
+                )
 
             if result.get("error"):
                 st.error(f"Analysis failed: {result['error']}")
@@ -159,91 +268,90 @@ if analyze_submitted:
                 status_text.text("Analysis completed!")
                 progress_bar.progress(100)
                 st.success("Analysis completed!")
+                # Persist in session so a rerun (after Save) doesn't wipe it.
+                st.session_state.last_result = result
+                st.session_state.last_inputs = job_data
+        else:
+            st.warning("Please provide a posting URL or paste the description, plus the required text fields (*).")
 
-                # --- Verdict badge -----------------------------------------------------
-                verdict = result.get("verdict") or {}
-                if verdict:
-                    light = verdict.get("light", "yellow")
-                    label = verdict.get("verdict", "Consider with Caution")
-                    confidence = verdict.get("confidence")
-                    badge_text = f"**Verdict:** {label}"
-                    if confidence is not None:
-                        badge_text += f" · Confidence {confidence}/10"
-                    if verdict.get("source") == "inferred":
-                        badge_text += " _(inferred — model didn't return structured verdict)_"
-                    if light == "green":
-                        st.success(badge_text)
-                    elif light == "red":
-                        st.error(badge_text)
-                    else:
-                        st.warning(badge_text)
-                    reasons = verdict.get("reasons") or []
-                    if reasons:
-                        for r in reasons:
-                            st.write(f"- {r}")
+    # Render the last result (survives the rerun after Save).
+    if st.session_state.get("last_result"):
+        render_result(st.session_state.last_result)
 
-                # --- Sections ----------------------------------------------------------
-                with st.expander("🎯 Job Analysis", expanded=True):
-                    st.write(result["job_details"])
-                    requirements = result["job_details"].get("requirements_analysis", {})
-                    tech_skills = requirements.get("technical_skills", []) if isinstance(requirements, dict) else []
-                    if tech_skills:
-                        st.subheader("Key Skills Required")
-                        for skill in tech_skills:
-                            st.write(f"- {skill}")
+        with st.form("save_application_form"):
+            st.markdown("### Save to applications")
+            col_s, col_n = st.columns([1, 3])
+            with col_s:
+                save_status = st.selectbox("Status", APPLICATION_STATUSES, index=0)
+            with col_n:
+                save_notes = st.text_input("Notes (optional)", "")
+            if st.form_submit_button("💾 Save analysis", type="primary"):
+                try:
+                    save_analysis(
+                        user_id=st.session_state.user_id,
+                        manual_inputs=st.session_state.last_inputs,
+                        analysis_result=st.session_state.last_result,
+                        status=save_status,
+                        notes=save_notes or None,
+                    )
+                    st.success("Saved to My Applications.")
+                except ApplicationError as exc:
+                    st.error(str(exc))
 
-                with st.expander("🏢 Company Research", expanded=True):
-                    st.write(result["company_analysis"])
 
-                with st.expander("💰 Compensation Analysis", expanded=True):
-                    st.write(result["salary_analysis"])
+# ---------------------------------------------------------------------------
+# My Applications tab
+# ---------------------------------------------------------------------------
 
-                resume_analysis = result.get("resume_analysis") or {}
-                if resume_analysis:
-                    with st.expander("📄 Resume / ATS Analysis", expanded=True):
-                        st.metric("ATS keyword match", f"{resume_analysis.get('ats_score', 0)}/100")
-                        col_m, col_g = st.columns(2)
-                        with col_m:
-                            st.write("**Matched required skills**")
-                            for s in resume_analysis.get("matched_skills", []) or ["_none_"]:
-                                st.write(f"- {s}")
-                        with col_g:
-                            st.write("**Missing required skills**")
-                            for s in resume_analysis.get("missing_skills", []) or ["_none_"]:
-                                st.write(f"- {s}")
-                        issues = resume_analysis.get("format_issues") or []
-                        if issues:
-                            st.write("**ATS formatting issues**")
-                            for i in issues:
-                                st.write(f"- {i}")
-                        st.markdown("---")
-                        st.markdown(resume_analysis.get("commentary", ""))
-
-                st.subheader("📑 Final Recommendation")
-                st.markdown(result["final_report"])
+with applications_tab:
+    records = list_applications(st.session_state.user_id)
+    if not records:
+        st.write("No saved applications yet. Run an analysis and click **💾 Save analysis**.")
     else:
-        st.warning("Please provide a posting URL or paste the description, plus the required text fields (*).")
+        st.write(f"You have **{len(records)}** saved application(s).")
+        for rec in records:
+            light = rec.verdict_light or "yellow"
+            light_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(light, "⚪")
+            ats = f" · ATS {rec.ats_score}/100" if rec.ats_score is not None else ""
+            header = (
+                f"{light_emoji} **{rec.job_title}** @ {rec.company_name} "
+                f"· _{rec.status}_{ats}"
+            )
+            with st.expander(header):
+                col_meta, col_actions = st.columns([3, 1])
+                with col_meta:
+                    st.write(f"**Location:** {rec.location or '—'}")
+                    st.write(f"**Verdict:** {rec.verdict or '—'}")
+                    st.write(f"**Saved:** {rec.created_at.strftime('%Y-%m-%d %H:%M')}")
+                    if rec.notes:
+                        st.write(f"**Notes:** {rec.notes}")
+                with col_actions:
+                    if st.button("🗑️ Delete", key=f"del_{rec.id}"):
+                        delete_application(st.session_state.user_id, rec.id)
+                        st.rerun()
 
+                with st.form(f"update_{rec.id}"):
+                    new_status = st.selectbox(
+                        "Update status",
+                        APPLICATION_STATUSES,
+                        index=APPLICATION_STATUSES.index(rec.status),
+                        key=f"status_{rec.id}",
+                    )
+                    new_notes = st.text_area("Notes", rec.notes or "", key=f"notes_{rec.id}")
+                    if st.form_submit_button("Update"):
+                        try:
+                            update_status(
+                                st.session_state.user_id,
+                                rec.id,
+                                status=new_status,
+                                notes=new_notes or None,
+                            )
+                            st.success("Updated.")
+                            st.rerun()
+                        except ApplicationError as exc:
+                            st.error(str(exc))
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
-
-st.sidebar.title("About")
-st.sidebar.info(
-    "AI-assisted analysis of job postings: requirements, company signals, "
-    "compensation and cost-of-living context, plus a final recommendation. "
-    "Upload a resume to also get an ATS match score and gap analysis."
-)
-
-if env_status["demo_mode"]:
-    st.sidebar.warning(
-        "**Demo mode active** — every section below is sample output, not a "
-        "real assessment of your posting."
-    )
-else:
-    st.sidebar.caption(
-        f"LLM provider: `{env_status['llm_provider']}`. External data sources "
-        "(news, salary benchmarks, COL) are still being integrated — figures "
-        "from those sections are model estimates and labelled as such."
-    )
+                report = rec.analysis_json.get("final_report")
+                if report:
+                    with st.expander("📑 Saved report"):
+                        st.markdown(report)

@@ -5,6 +5,7 @@ description = "AI-assisted job-offer analysis platform (Phase 0: real LLM integr
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
+    "bcrypt>=4.1.0",
     "beautifulsoup4>=4.13.3",
     "langchain>=0.3.19",
     "langgraph>=0.3.1",
@@ -12,5 +13,6 @@ dependencies = [
     "pypdf>=4.0.0",
     "python-docx>=1.1.0",
     "requests>=2.32.3",
+    "sqlalchemy>=2.0.30",
     "streamlit>=1.42.2",
 ]
