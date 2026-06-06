@@ -41,6 +41,7 @@ from services.stages import (
     list_stages,
 )
 from services.constraint_check import ConstraintCheck, summarize as summarize_check
+from services.pdf_export import PDFExportError, markdown_to_pdf
 from services.suggestions import (
     apply_skill_addition,
     build_suggestions,
@@ -802,7 +803,7 @@ with applications_tab:
 
                             st.markdown("---")
                             st.markdown(a.content)
-                            a_btns = st.columns([1, 1, 3])
+                            a_btns = st.columns([1, 1, 2, 2])
                             with a_btns[0]:
                                 if st.button("🗑️", key=f"art_del_{a.id}"):
                                     try:
@@ -819,12 +820,27 @@ with applications_tab:
                                         st.error(str(exc))
                             with a_btns[2]:
                                 st.download_button(
-                                    "⬇️ Download .md",
+                                    "⬇️ .md",
                                     data=a.content,
                                     file_name=f"{a.kind}_{rec.company_name}_{a.id}.md",
                                     mime="text/markdown",
-                                    key=f"art_dl_{a.id}",
+                                    key=f"art_dl_md_{a.id}",
                                 )
+                            with a_btns[3]:
+                                try:
+                                    pdf_bytes = markdown_to_pdf(
+                                        a.content,
+                                        title=f"{label} — {rec.company_name}",
+                                    )
+                                    st.download_button(
+                                        "⬇️ .pdf",
+                                        data=pdf_bytes,
+                                        file_name=f"{a.kind}_{rec.company_name}_{a.id}.pdf",
+                                        mime="application/pdf",
+                                        key=f"art_dl_pdf_{a.id}",
+                                    )
+                                except PDFExportError as exc:
+                                    st.caption(f"PDF disabled: {exc}")
 
                 report = rec.analysis_json.get("final_report")
                 if report:
