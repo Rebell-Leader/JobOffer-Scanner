@@ -93,6 +93,15 @@ from services.notifications import (
     notify_stage_added,
     send_password_reset_email,
 )
+from services.webhooks import (
+    WebhookError,
+    delete_webhook,
+    dispatch_event_background,
+    list_deliveries as list_webhook_deliveries,
+    list_webhooks,
+    register_webhook,
+    set_active as set_webhook_active,
+)
 from services.totp import (
     TOTPError,
     confirm_setup as totp_confirm_setup,
@@ -416,6 +425,49 @@ with st.sidebar.expander("🔑 API tokens"):
                             st.rerun()
                         except ApiTokenError as exc:
                             st.error(str(exc))
+
+with st.sidebar.expander("🪝 Webhooks"):
+    from db.models import WEBHOOK_EVENTS
+    st.caption(
+        "POST a signed JSON payload to your URL when events fire. Each "
+        "request carries an `X-JobOffer-Signature: sha256=…` HMAC header "
+        "computed with the webhook secret."
+    )
+    with st.form("new_webhook_form"):
+        wh_url = st.text_input("Endpoint URL", placeholder="https://example.com/hook")
+        wh_events = st.multiselect("Events", list(WEBHOOK_EVENTS), default=["stage.added"])
+        if st.form_submit_button("Add webhook", type="primary"):
+            try:
+                wh = register_webhook(st.session_state.user_id, wh_url, wh_events)
+                st.success("Webhook created. Secret (verify signatures with this):")
+                st.code(wh.secret, language=None)
+            except WebhookError as exc:
+                st.error(str(exc))
+
+    hooks = list_webhooks(st.session_state.user_id)
+    if hooks:
+        st.markdown("**Configured webhooks**")
+        for wh in hooks:
+            state = "active" if wh.active else "paused"
+            cols = st.columns([4, 1])
+            with cols[0]:
+                st.caption(f"#{wh.id} · _{state}_ · {', '.join(wh.events)}")
+                st.caption(wh.url)
+            with cols[1]:
+                if st.button("Pause" if wh.active else "Resume", key=f"wh_toggle_{wh.id}"):
+                    set_webhook_active(st.session_state.user_id, wh.id, not wh.active)
+                    st.rerun()
+                if st.button("🗑️", key=f"wh_del_{wh.id}"):
+                    delete_webhook(st.session_state.user_id, wh.id)
+                    st.rerun()
+
+        deliveries = list_webhook_deliveries(st.session_state.user_id, limit=8)
+        if deliveries:
+            st.markdown("**Recent deliveries**")
+            for d in deliveries:
+                icon = "✅" if d.success else "❌"
+                code = d.status_code if d.status_code is not None else "—"
+                st.caption(f"{icon} `{d.event}` → HTTP {code} ({d.attempts} attempt(s))")
 
 with st.sidebar.expander("🔐 Two-factor authentication"):
     if totp_is_enabled(st.session_state.user_id):
@@ -966,12 +1018,22 @@ with analyze_tab:
                 save_notes = st.text_input("Notes (optional)", "")
             if st.form_submit_button("💾 Save analysis", type="primary"):
                 try:
-                    save_analysis(
+                    saved_rec = save_analysis(
                         user_id=st.session_state.user_id,
                         manual_inputs=st.session_state.last_inputs,
                         analysis_result=st.session_state.last_result,
                         status=save_status,
                         notes=save_notes or None,
+                    )
+                    dispatch_event_background(
+                        st.session_state.user_id, "application.saved",
+                        {
+                            "application_id": saved_rec.id,
+                            "company_name": saved_rec.company_name,
+                            "job_title": saved_rec.job_title,
+                            "verdict": saved_rec.verdict,
+                            "status": saved_rec.status,
+                        },
                     )
                     st.success("Saved to My Applications.")
                 except ApplicationError as exc:
@@ -1285,6 +1347,16 @@ with applications_tab:
                             notify_stage_added(
                                 st.session_state.user_id, rec, new_stage,
                             )
+                            dispatch_event_background(
+                                st.session_state.user_id, "stage.added",
+                                {
+                                    "application_id": rec.id,
+                                    "company_name": rec.company_name,
+                                    "job_title": rec.job_title,
+                                    "stage": kind,
+                                    "occurred_on": new_stage.occurred_on.isoformat(),
+                                },
+                            )
                             st.rerun()
                         except StageError as exc:
                             st.error(str(exc))
@@ -1324,6 +1396,16 @@ with applications_tab:
                                 )
                                 notify_stage_added(
                                     st.session_state.user_id, rec, new_stage,
+                                )
+                                dispatch_event_background(
+                                    st.session_state.user_id, "stage.added",
+                                    {
+                                        "application_id": rec.id,
+                                        "company_name": rec.company_name,
+                                        "job_title": rec.job_title,
+                                        "stage": new_stage.kind,
+                                        "occurred_on": new_stage.occurred_on.isoformat(),
+                                    },
                                 )
                                 st.success("Stage added.")
                                 st.rerun()

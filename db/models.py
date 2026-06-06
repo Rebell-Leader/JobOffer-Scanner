@@ -387,6 +387,65 @@ class ApiToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+# ---------------------------------------------------------------------------
+# Webhooks — outbound HMAC-signed POSTs on user-subscribed events
+# ---------------------------------------------------------------------------
+
+# The event kinds a webhook can subscribe to. Kept narrow + explicit so the
+# subscription UI is a fixed checklist and payload shapes stay documented.
+WEBHOOK_EVENTS = (
+    "stage.added",
+    "application.saved",
+    "verdict.changed",
+)
+
+
+class Webhook(Base):
+    """A user's outbound webhook subscription.
+
+    ``secret`` signs every delivery (HMAC-SHA256) so the receiver can verify
+    authenticity. ``events`` is the JSON list of subscribed event kinds.
+    ``active`` lets the owner pause deliveries without losing the config.
+    """
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class WebhookDelivery(Base):
+    """One delivery attempt record — the receipt log for a webhook POST.
+
+    Persisted so the owner can see what fired, whether it succeeded, and the
+    response/error. Failed deliveries can be re-sent via the service.
+    """
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    webhook_id: Mapped[int] = mapped_column(
+        ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status_code: Mapped[Optional[int]] = mapped_column(Integer)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ApplicationShare(Base):
     """A read-only sharing token for one ``Application``.
 
@@ -446,6 +505,8 @@ AUDIT_KINDS = (
     "api_token.create",
     "api_token.revoke",
     "api_token.used",
+    "webhook.create",
+    "webhook.delete",
 )
 
 
