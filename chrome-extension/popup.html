@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: system-ui, sans-serif; width: 360px; padding: 12px; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      label { display: block; font-size: 12px; margin-top: 8px; color: #444; }
+      input { width: 100%; box-sizing: border-box; padding: 6px; margin-top: 2px; }
+      button { margin-top: 10px; padding: 8px 12px; cursor: pointer; width: 100%; }
+      #verdict { font-size: 18px; margin-top: 12px; font-weight: 600; }
+      #report { margin-top: 8px; max-height: 280px; overflow: auto;
+                white-space: pre-wrap; font-size: 12px; border-top: 1px solid #ddd;
+                padding-top: 8px; }
+      .muted { color: #888; font-size: 11px; }
+      .error { color: #c0392b; font-size: 12px; margin-top: 8px; }
+      details { margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>JobOffer Scanner</h1>
+
+    <details id="settings">
+      <summary>Settings</summary>
+      <label>API base URL
+        <input id="baseUrl" placeholder="https://yourdomain.com" />
+      </label>
+      <label>API token (jos_…)
+        <input id="token" type="password" placeholder="jos_…" />
+      </label>
+      <button id="save">Save settings</button>
+      <div class="muted">Create a token in the web app → sidebar → API tokens.</div>
+    </details>
+
+    <button id="analyze">Analyze this page</button>
+
+    <div id="verdict"></div>
+    <div id="error" class="error"></div>
+    <div id="report"></div>
+
+    <script src="extract.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
