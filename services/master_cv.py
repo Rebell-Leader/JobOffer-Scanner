@@ -188,6 +188,31 @@ def delete_revision(user_id: int, revision_id: int) -> None:
         session.commit()
 
 
+def diff_revision_against_current(user_id: int, revision_id: int) -> str:
+    """Return a unified diff: ``revision_id`` -> current master CV.
+
+    The "before" side is the revision (the older state); the "after" side is
+    the current master CV. Empty string when they're identical. Ownership-
+    checked: a revision owned by another user raises ``MasterCVError``.
+    """
+    from utils.diff import unified_diff  # local import — keeps the module light
+
+    with get_session() as session:
+        rev = session.get(MasterCVRevision, revision_id)
+        if rev is None or rev.user_id != user_id:
+            raise MasterCVError("Revision not found.")
+        cv = session.execute(
+            select(MasterCV).where(MasterCV.user_id == user_id)
+        ).scalar_one_or_none()
+        if cv is None:
+            raise MasterCVError("No active master CV to diff against.")
+        return unified_diff(
+            rev.raw_text, cv.raw_text,
+            before_label=f"revision #{rev.id}",
+            after_label="current",
+        )
+
+
 def save_master_cv_from_upload(
     user_id: int, file_bytes: bytes, filename: str
 ) -> MasterCVRecord:

@@ -28,6 +28,7 @@ from services.master_cv import (
     MasterCVError,
     delete_master_cv,
     delete_revision,
+    diff_revision_against_current,
     get_master_cv,
     list_revisions,
     parse_master_cv,
@@ -77,6 +78,7 @@ from services.rate_limit import RateLimitExceeded
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
+from utils.diff import unified_diff
 
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
@@ -835,6 +837,79 @@ with applications_tab:
 
                 # List existing artifacts (newest first).
                 arts = list_artifacts(st.session_state.user_id, rec.id)
+
+                # A/B comparison toggle — pick two artifacts of the same kind
+                # and view them side by side, optionally as a unified diff.
+                if len(arts) >= 2:
+                    compare_key = f"compare_mode_{rec.id}"
+                    if st.toggle(
+                        "🆚 Compare two artifacts",
+                        key=compare_key,
+                        value=st.session_state.get(compare_key, False),
+                    ):
+                        kinds_present = {a.kind for a in arts}
+                        ab_kind = st.selectbox(
+                            "Kind",
+                            sorted(kinds_present),
+                            format_func=lambda k: "Tailored CV" if k == "tailored_cv" else "Cover letter",
+                            key=f"compare_kind_{rec.id}",
+                        )
+                        same_kind = [a for a in arts if a.kind == ab_kind]
+                        if len(same_kind) < 2:
+                            st.info(
+                                f"Need at least 2 saved {ab_kind!r} artifacts "
+                                "for this application to compare. Generate "
+                                "another version above first."
+                            )
+                        else:
+                            options = {
+                                f"#{a.id} · {a.created_at.strftime('%Y-%m-%d %H:%M')}": a
+                                for a in same_kind
+                            }
+                            labels = list(options.keys())
+                            a_label = st.selectbox(
+                                "Version A", labels, index=0,
+                                key=f"compare_a_{rec.id}",
+                            )
+                            b_label = st.selectbox(
+                                "Version B", labels, index=min(1, len(labels) - 1),
+                                key=f"compare_b_{rec.id}",
+                            )
+                            art_a = options[a_label]
+                            art_b = options[b_label]
+                            if art_a.id == art_b.id:
+                                st.caption("_Pick two different versions to compare._")
+                            else:
+                                col_a, col_b = st.columns(2)
+                                for col, art in ((col_a, art_a), (col_b, art_b)):
+                                    with col:
+                                        check = ConstraintCheck.from_dict(
+                                            (art.meta or {}).get("constraint_check")
+                                        )
+                                        badge = "✅" if check.is_clean else "⚠️"
+                                        st.markdown(
+                                            f"**#{art.id}** · "
+                                            f"{art.created_at.strftime('%Y-%m-%d %H:%M')} "
+                                            f"· {badge}"
+                                        )
+                                        if art.kind == "cover_letter":
+                                            tone = (art.meta or {}).get("tone")
+                                            if tone:
+                                                st.caption(f"tone: `{tone}`")
+                                        st.markdown(art.content)
+                                with st.expander("📐 Show unified diff (A → B)"):
+                                    diff_text = unified_diff(
+                                        art_a.content, art_b.content,
+                                        before_label=f"#{art_a.id}",
+                                        after_label=f"#{art_b.id}",
+                                    )
+                                    if not diff_text.strip():
+                                        st.caption(
+                                            "_Identical content — no diff to show._"
+                                        )
+                                    else:
+                                        st.code(diff_text, language="diff")
+
                 if arts:
                     for a in arts:
                         icon = "📄" if a.kind == "tailored_cv" else "✉️"
@@ -1118,7 +1193,7 @@ with cv_tab:
                 f"**Saved master CV** · {len(current_cv.raw_text)} characters · "
                 f"updated {current_cv.updated_at.strftime('%Y-%m-%d %H:%M')}"
             )
-            parse_col, del_col = st.columns([1, 1])
+            parse_col, pdf_col, del_col = st.columns([2, 1, 1])
             with parse_col:
                 if st.button("🧠 Parse into structured sections (optional)"):
                     with st.spinner("Asking the model to structure your CV…"):
@@ -1128,6 +1203,20 @@ with cv_tab:
                             st.json(structured)
                         except MasterCVError as exc:
                             st.error(str(exc))
+            with pdf_col:
+                try:
+                    cv_pdf = markdown_to_pdf(
+                        current_cv.raw_text, title="Master CV"
+                    )
+                    st.download_button(
+                        "⬇️ Master CV .pdf",
+                        data=cv_pdf,
+                        file_name="master_cv.pdf",
+                        mime="application/pdf",
+                        key="master_cv_pdf",
+                    )
+                except PDFExportError as exc:
+                    st.caption(f"PDF disabled: {exc}")
             with del_col:
                 armed_key = "del_master_cv_armed"
                 if st.session_state.get(armed_key):
@@ -1169,6 +1258,19 @@ with cv_tab:
                             )
                             with st.expander("Preview", expanded=False):
                                 st.text(rev.raw_text[:2000] + ("…" if len(rev.raw_text) > 2000 else ""))
+                            with st.expander("🔀 Diff against current", expanded=False):
+                                diff_text = diff_revision_against_current(
+                                    st.session_state.user_id, rev.id,
+                                )
+                                if not diff_text.strip():
+                                    st.caption(
+                                        "_No textual differences from the "
+                                        "current master CV._"
+                                    )
+                                else:
+                                    # Streamlit colours +/- lines when we tag
+                                    # the code block as a diff.
+                                    st.code(diff_text, language="diff")
                         with rcol2:
                             armed_key = f"rev_restore_armed_{rev.id}"
                             if st.session_state.get(armed_key):
