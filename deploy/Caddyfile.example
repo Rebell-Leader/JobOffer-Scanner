@@ -1,0 +1,41 @@
+# Caddy reverse proxy in front of Streamlit (web UI) + FastAPI (REST API).
+#
+# Caddy auto-provisions TLS, which is what makes Secure cookies + HSTS
+# meaningful. Streamlit cannot set these headers itself, so the proxy is the
+# correct layer for CSP / HSTS / cookie hardening of the web UI.
+#
+#   caddy run --config deploy/Caddyfile.example
+
+yourdomain.com {
+	encode gzip
+
+	# --- Security headers for the web UI (Streamlit) ---
+	header {
+		# Streamlit needs 'unsafe-inline'/'unsafe-eval' for its bundled JS;
+		# this is the practical CSP for a Streamlit app. Tighten if you
+		# self-host the static assets with hashes.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
+	# Mark cookies Secure (the app is HTTPS-only behind Caddy). Streamlit's
+	# session cookie is set by the upstream; we upgrade it here.
+	header +Set-Cookie "(.*)" "$1; Secure; SameSite=Lax"
+
+	# REST API under /api/* -> FastAPI. Its own SecurityHeadersMiddleware
+	# sets the strict JSON CSP, so we just proxy.
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Everything else -> Streamlit. The websocket upgrade is handled
+	# automatically by reverse_proxy.
+	handle {
+		reverse_proxy 127.0.0.1:5000
+	}
+}

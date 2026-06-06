@@ -18,6 +18,7 @@ import logging
 from fastapi import FastAPI
 
 from api.routes import router
+from api.security import add_security_headers
 from db.session import init_db
 from utils.logging_setup import configure as configure_logging
 
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
     app.include_router(router)
+    add_security_headers(app)
 
     @app.get("/healthz")
     def healthz():
