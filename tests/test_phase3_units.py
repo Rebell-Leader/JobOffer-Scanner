@@ -10,9 +10,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 def _fresh_db():
-    """Re-init the global engine against an in-memory SQLite for each test."""
+    """Re-init the global engine against an in-memory SQLite for each test
+    and wipe any leftover rate-limit counters from earlier tests."""
     from db.session import reset_engine_for_testing
+    from services.rate_limit import reset_backend_for_testing
     reset_engine_for_testing("sqlite:///:memory:")
+    reset_backend_for_testing()
 
 
 class AuthTests(unittest.TestCase):

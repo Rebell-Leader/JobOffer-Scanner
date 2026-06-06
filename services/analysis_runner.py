@@ -13,9 +13,19 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
+from services.rate_limit import ANALYSIS_LIMITER, RateLimitExceeded
 from worker.tasks import analyze_payload
 
 logger = logging.getLogger(__name__)
+
+
+def check_user_quota(user_id: Optional[int]) -> None:
+    """Enforce the per-user analysis quota. ``None`` skips (bot/anon flow)."""
+    if user_id is None:
+        return
+    decision = ANALYSIS_LIMITER.check(str(user_id))
+    if not decision.allowed:
+        raise RateLimitExceeded(decision.retry_after)
 
 
 def async_enabled() -> bool:

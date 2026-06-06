@@ -20,6 +20,12 @@ from sqlalchemy import select
 
 from db.models import PasswordResetToken, User
 from db.session import get_session
+from services.rate_limit import (
+    LOGIN_LIMITER,
+    REGISTER_LIMITER,
+    RESET_LIMITER,
+    RateLimitExceeded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,10 @@ def register_user(email: str, password: str) -> AuthedUser:
     if len(password) < _MIN_PASSWORD_LEN:
         raise AuthError(f"Password must be at least {_MIN_PASSWORD_LEN} characters.")
 
+    decision = REGISTER_LIMITER.check(email)
+    if not decision.allowed:
+        raise RateLimitExceeded(decision.retry_after)
+
     with get_session() as session:
         existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
@@ -85,10 +95,15 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
     password" so the response doesn't leak which emails are registered.
     """
     email = _normalize_email(email)
+    decision = LOGIN_LIMITER.check(email)
+    if not decision.allowed:
+        raise RateLimitExceeded(decision.retry_after)
     with get_session() as session:
         user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if user is None or not _verify_password(password, user.password_hash):
             raise AuthError("Invalid email or password.")
+        # Clean break so a few past typos don't keep penalizing a legit login.
+        LOGIN_LIMITER.reset(email)
         return AuthedUser(id=user.id, email=user.email)
 
 
@@ -123,6 +138,9 @@ def request_password_reset(email: str) -> Optional[str]:
     caller's responsibility — we don't bake in an email provider.
     """
     email = _normalize_email(email)
+    decision = RESET_LIMITER.check(email)
+    if not decision.allowed:
+        raise RateLimitExceeded(decision.retry_after)
     with get_session() as session:
         user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if user is None:

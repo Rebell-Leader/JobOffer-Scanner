@@ -8,11 +8,19 @@ capture what would have been sent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
 from agents.orchestrator import run_analysis
+from services.analysis_runner import (
+    async_enabled,
+    enqueue_analysis,
+    get_async_result,
+)
 from tools.url_ingest import fetch_job_posting, is_url
 
 logger = logging.getLogger(__name__)
@@ -140,12 +148,7 @@ async def handle_analyze(reply: Reply, args: str) -> None:
 
     await reply("Analyzing — this can take 30-60 seconds…")
     try:
-        result = run_analysis(
-            posting_text,
-            manual_inputs=None,
-            model="fast",  # Telegram users want quick replies.
-            progress_callback=None,
-        )
+        result = await _run_analysis_for_bot(posting_text)
     except Exception as exc:  # noqa: BLE001 - reported to user
         logger.exception("Telegram analyze failed.")
         await reply(f"❌ Analysis crashed: {exc}")
@@ -155,3 +158,43 @@ async def handle_analyze(reply: Reply, args: str) -> None:
     final = result.get("final_report") or ""
     for chunk in chunk_for_telegram(final):
         await reply(chunk)
+
+
+# ---------------------------------------------------------------------------
+# Execution: prefer Celery worker when available, fall back to in-process.
+# ---------------------------------------------------------------------------
+
+# Bot-level poll cadence + timeout for queued tasks.
+_BOT_POLL_INTERVAL = float(os.getenv("BOT_TASK_POLL_INTERVAL", "2.0"))
+_BOT_POLL_TIMEOUT = float(os.getenv("BOT_TASK_TIMEOUT", "600"))
+
+
+async def _run_analysis_for_bot(posting_text: str) -> dict:
+    """Pick the best execution path: async queue if available, else inline.
+
+    Async path: enqueue via Celery, then poll for completion off the event
+    loop so the bot stays responsive to other users while a long analysis
+    runs in the worker.
+    """
+    if async_enabled():
+        task_id = enqueue_analysis(posting_text, manual_inputs=None, model="fast")
+        if task_id is not None:
+            return await _await_task(task_id)
+    # Inline fallback. run_analysis is sync-blocking; offload it so the asyncio
+    # loop stays free to handle other commands while we wait.
+    return await asyncio.to_thread(
+        run_analysis, posting_text, None, "fast", None,
+    )
+
+
+async def _await_task(task_id: str) -> dict:
+    """Poll a Celery task to completion without blocking the event loop."""
+    deadline = time.monotonic() + _BOT_POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        state, result = await asyncio.to_thread(get_async_result, task_id)
+        if state in ("SUCCESS",):
+            return result or {}
+        if state in ("FAILURE", "REVOKED"):
+            return {"error": f"Task {task_id} ended in state {state}: {result}"}
+        await asyncio.sleep(_BOT_POLL_INTERVAL)
+    return {"error": f"Analysis did not finish within {int(_BOT_POLL_TIMEOUT)}s."}

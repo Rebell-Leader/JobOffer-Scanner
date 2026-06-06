@@ -96,6 +96,35 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 7 (shipped)
+- ✅ **Rate limiting** (`services/rate_limit.py`) — sliding-window limiter
+  with thread-safe in-memory backend (default) and Redis backend
+  (auto-selected when `REDIS_URL` or `CELERY_BROKER_URL` is set). Pre-wired
+  limiters: login (10/5min), register (5/hour), reset-request (5/hour),
+  analysis (30/hour). Successful login clears the failure counter. All limits
+  env-configurable via `RL_*_MAX` / `RL_*_WINDOW`.
+- ✅ **Telegram bot uses the async queue** — when a Celery broker is
+  configured the bot enqueues + polls the worker (off the event loop, so
+  other commands stay responsive); falls back to in-thread execution when
+  no queue is available. Timeout and failure-state reporting included.
+- ✅ **UI/UX overhaul**:
+  - **Required-field trap fixed** — Company/Title/Location are now optional;
+    they auto-populate from extraction. Save still requires them, but
+    extraction fills in for users who leave fields blank.
+  - **Posting input split** into "🔗 From URL" / "📝 Paste text" tabs.
+  - **Auth tabs collapsed** from 4 → 3 (Forgot + Reset merged into a single
+    "Recover password" two-step flow).
+  - **Two-step delete** in My Applications — first click arms, second
+    confirms. No more one-click data loss.
+  - **Search + status filter** on My Applications; user-friendly empty
+    state for new accounts.
+  - **Resume ATS visual upgrade** — big colored score banner, matched skills
+    in green ✓, missing skills in red ✗, count metrics.
+  - Sign-out moved to the bottom of the sidebar so it stops being the
+    second-most-clickable button.
+  - Optional Telegram-bot link in sidebar (`TELEGRAM_BOT_USERNAME`).
+- ✅ 100 unit tests total (15 new for Phase 7).
+
 ### Phase 6 (shipped)
 - ✅ **Browser scraper** (`tools/browser_scraper.py`) for resources whose API
   is paid/unavailable: headless Playwright rendering of JS job boards

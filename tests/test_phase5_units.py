@@ -15,7 +15,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 def _fresh_db():
     from db.session import reset_engine_for_testing
+    from services.rate_limit import reset_backend_for_testing
     reset_engine_for_testing("sqlite:///:memory:")
+    reset_backend_for_testing()
 
 
 # ---------------------------------------------------------------------------
