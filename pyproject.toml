@@ -9,6 +9,8 @@ dependencies = [
     "langchain>=0.3.19",
     "langgraph>=0.3.1",
     "openai>=1.65.1",
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
     "requests>=2.32.3",
     "streamlit>=1.42.2",
 ]

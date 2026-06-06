@@ -27,14 +27,28 @@ returns sample data — never silently. See `.env.example`.
   honest "NOT AVAILABLE" fallback when unconfigured (`tools/data_sources.py`)
 - ✅ Optional layoffs dataset via `LAYOFFS_DATASET_URL`
 - ✅ Company + salary stages run concurrently (thread pool) for faster results
-- ✅ Unit tests for security + data-source formatting
 
-### Honest Gaps (Phase 2+)
+### Phase 2 (shipped)
+- ✅ **Resume / ATS analysis** — upload PDF/DOCX/TXT; deterministic
+  keyword-match score against required skills (boundary-aware: C# ≠ C),
+  ATS formatting checks (tables, ALL-CAPS body, etc.), plus LLM gap
+  commentary (`tools/resume_tools.py`)
+- ✅ **Optional job-URL ingestion** — paste a URL or the description text;
+  honest error when JS-rendered pages don't yield enough content
+  (`tools/url_ingest.py`)
+- ✅ **Structured Green / Yellow / Red verdict** with machine-readable JSON
+  sidecar and an inference fallback (`utils/verdict.py`); rendered as a
+  colored badge above the report
+- ✅ 21 unit tests covering security, data-source formatting, ATS scoring,
+  verdict extraction, URL ingest
+
+### Honest Gaps (Phase 3+)
 - 🔄 Salary & COL figures still come from internal heuristics (labelled
   ESTIMATE), not Glassdoor/Numbeo/levels.fyi
-- ❌ Resume / ATS analysis (headline feature from the vision doc) not built
-- ❌ Job-URL ingestion (paste-only today)
-- ❌ No persistence, auth, or application tracking (Phase 3)
+- ❌ No persistence, auth, or application tracking — every analysis is one-shot
+- ❌ No async job queue for large workloads (still in-process)
+- ❌ JS-heavy job boards (LinkedIn / Indeed / Glassdoor) need a real headless
+  scraper; the generic URL ingest is best-effort only
 
 ## 🎯 Roadmap: Production-Ready Features
 

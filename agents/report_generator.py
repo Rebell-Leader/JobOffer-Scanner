@@ -2,6 +2,7 @@ import json
 from typing import Dict
 
 from utils.llm import get_completion
+from utils.verdict import extract_verdict, strip_verdict_block
 
 
 def generate(state: Dict) -> Dict:
@@ -19,6 +20,7 @@ def generate(state: Dict) -> Dict:
     requirements = job_details.get("requirements_analysis") or {}
     company_analysis = state.get("company_analysis") or {}
     salary_analysis = state.get("salary_analysis") or {}
+    resume_analysis = state.get("resume_analysis") or {}
 
     company_name = extracted.get("company_name") or "the company"
     job_title = extracted.get("job_title") or "this position"
@@ -34,6 +36,20 @@ def generate(state: Dict) -> Dict:
         ]
     )
 
+    resume_section = ""
+    if resume_analysis:
+        resume_section = f"""
+
+## Resume / ATS Analysis (provided)
+- ATS keyword match score (deterministic): **{resume_analysis.get('ats_score')}/100**
+- Matched required skills: {resume_analysis.get('matched_skills', [])}
+- Missing required skills: {resume_analysis.get('missing_skills', [])}
+- ATS formatting issues: {resume_analysis.get('format_issues', [])}
+
+Resume gap commentary:
+{resume_analysis.get('commentary', '')}
+"""
+
     prompt = f"""
 Generate a comprehensive job analysis report from the data below.
 
@@ -48,6 +64,7 @@ Generate a comprehensive job analysis report from the data below.
 
 ## Salary Analysis
 {json.dumps(salary_analysis, indent=2)}
+{resume_section}
 
 Structure your markdown report with these sections:
 1. **Executive Summary** — position, key findings, headline verdict.
@@ -57,13 +74,23 @@ Structure your markdown report with these sections:
 3. **Job Requirements Analysis** — required skills/experience and how
    distinctive they are.
 4. **Compensation Analysis** — range, COL context, negotiation moves.
-5. **Final Recommendation** — exactly one of:
+5. **Resume Fit** (only if Resume / ATS Analysis was provided above) — lead
+   with the deterministic ATS score, then summarize the gap commentary.
+6. **Final Recommendation** — exactly one of:
    `Highly Recommended` / `Recommended` / `Consider with Caution` / `Not Recommended`,
    followed by the top three reasons.
+
+After the markdown report, append a structured verdict block on its OWN line,
+with no surrounding prose, in EXACTLY this format:
+
+<verdict_json>
+{{"verdict": "<one of the four labels>", "reasons": ["...", "...", "..."], "confidence": <integer 1-10>}}
+</verdict_json>
 
 Rules:
 - Do not output `<think>` blocks or markdown code fences around the whole report.
 - Do not fabricate company news, layoffs, or salary benchmarks.
+- The verdict in the JSON block MUST match the one in the markdown.
 """
 
     try:
@@ -75,11 +102,12 @@ Rules:
     if not report.lstrip().startswith("#"):
         report = f"# Job Analysis Report: {job_title} at {company_name}\n\n{report}"
 
-    # Strip stray markdown fences the model might wrap the whole report in.
     if "```markdown" in report:
         report = report.replace("```markdown", "").replace("```", "")
 
-    state["final_report"] = report
+    # Extract structured verdict, then strip the sidecar from user-facing markdown.
+    state["verdict"] = extract_verdict(report)
+    state["final_report"] = strip_verdict_block(report)
 
     if progress_callback:
         progress_callback("report", 100, "Final report generated successfully")
