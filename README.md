@@ -20,13 +20,21 @@ returns sample data — never silently. See `.env.example`.
 - ✅ Streamlit UI, progress callbacks, thread-safe cache
 - ✅ End-to-end demo-mode smoke test
 
-### Honest Gaps (Phase 1+)
-- 🔄 No live company news / layoffs feed yet — placeholder, not a clean bill of health
-- 🔄 Salary & COL figures come from internal heuristics, not Glassdoor/Numbeo
-- ❌ Employee-review fabrication has been REMOVED — culture section is now an
-  inference briefing with research pointers, not invented reviews
+### Phase 1 (shipped)
+- ✅ Prompt-injection hardening — untrusted job text & company names are
+  sanitized and wrapped as inert data (`utils/security.py`)
+- ✅ Pluggable real company-news feed via `NEWS_API_KEY` (newsapi.org), with
+  honest "NOT AVAILABLE" fallback when unconfigured (`tools/data_sources.py`)
+- ✅ Optional layoffs dataset via `LAYOFFS_DATASET_URL`
+- ✅ Company + salary stages run concurrently (thread pool) for faster results
+- ✅ Unit tests for security + data-source formatting
+
+### Honest Gaps (Phase 2+)
+- 🔄 Salary & COL figures still come from internal heuristics (labelled
+  ESTIMATE), not Glassdoor/Numbeo/levels.fyi
 - ❌ Resume / ATS analysis (headline feature from the vision doc) not built
-- ❌ No persistence, auth, or application tracking
+- ❌ Job-URL ingestion (paste-only today)
+- ❌ No persistence, auth, or application tracking (Phase 3)
 
 ## 🎯 Roadmap: Production-Ready Features
 

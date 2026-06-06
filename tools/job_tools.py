@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - older langchain layout
 
 from utils.cache import cache
 from utils.llm import get_completion
+from utils.security import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def extract_job_details(job_posting: str, model: str = "detailed") -> dict:
 Extract key information from this job posting and return STRICT JSON.
 
 Job posting:
-{job_posting}
+{wrap_untrusted(job_posting, "job_posting")}
 
 Return JSON with exactly these keys (use null if unknown, never invent):
 {{
@@ -127,7 +128,7 @@ def analyze_requirements(job_posting: str, model: str = "detailed") -> dict:
     prompt = f"""
 Analyze the requirements in this job posting and return STRICT JSON only:
 
-{job_posting}
+{wrap_untrusted(job_posting, "job_posting")}
 
 Return:
 {{

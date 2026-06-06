@@ -22,28 +22,30 @@ except ImportError:  # pragma: no cover - older langchain layout
 
 from utils.cache import cache
 from utils.llm import get_completion
+from utils.security import sanitize_untrusted, wrap_untrusted
+from tools.data_sources import fetch_company_news, fetch_layoffs
 
 logger = logging.getLogger(__name__)
 
 
 _LAYOFFS_PLACEHOLDER = (
-    "LAYOFFS DATA NOT AVAILABLE: real layoffs.fyi integration is not yet "
-    "wired up. Do not assume the absence of layoffs from this placeholder."
+    "LAYOFFS DATA NOT AVAILABLE: no layoffs dataset configured "
+    "(set LAYOFFS_DATASET_URL). Do not assume the absence of layoffs."
 )
 _NEWS_PLACEHOLDER = (
-    "RECENT NEWS NOT AVAILABLE: real news-API integration is not yet wired "
-    "up. Do not invent news items; reason only from the job posting itself."
+    "RECENT NEWS NOT AVAILABLE: no news source configured (set NEWS_API_KEY). "
+    "Do not invent news items; reason only from the job posting itself."
 )
 
 
 def check_layoffs_data(company_name: str) -> str:
-    # TODO(phase-1): query layoffs.fyi or an equivalent dataset.
-    return _LAYOFFS_PLACEHOLDER
+    """Real layoffs lookup when configured, else an explicit sentinel."""
+    return fetch_layoffs(company_name) or _LAYOFFS_PLACEHOLDER
 
 
 def get_company_news(company_name: str) -> str:
-    # TODO(phase-1): query a news API (NewsAPI, GDELT, etc.).
-    return _NEWS_PLACEHOLDER
+    """Real news lookup when configured, else an explicit sentinel."""
+    return fetch_company_news(company_name) or _NEWS_PLACEHOLDER
 
 
 def analyze_company_stability(company_name: str, model: str = "detailed") -> str:
@@ -52,13 +54,15 @@ def analyze_company_stability(company_name: str, model: str = "detailed") -> str
     With external data sources still pending, the LLM is told explicitly that
     layoffs/news are unknown and instructed to label inferences as inferences.
     """
+    company_name = sanitize_untrusted(company_name, max_chars=200)
     cache_key = f"stability_{company_name}_{model}"
     cached = cache.get(cache_key)
     if cached:
         return cached
 
-    layoffs_info = check_layoffs_data(company_name)
-    news_summary = get_company_news(company_name)
+    # Fetched news/layoffs are external & untrusted — wrap as inert data.
+    layoffs_info = wrap_untrusted(check_layoffs_data(company_name), "layoff_signal")
+    news_summary = wrap_untrusted(get_company_news(company_name), "news_signal")
 
     prompt = f"""
 Assess the stability and growth prospects of **{company_name}** for a job seeker.
@@ -97,6 +101,7 @@ def analyze_culture_signals(company_name: str, model: str = "detailed") -> str:
     version makes the LLM reason about *what to look for* and known
     industry-level patterns, without inventing quotes or ratings.
     """
+    company_name = sanitize_untrusted(company_name, max_chars=200)
     cache_key = f"culture_{company_name}_{model}"
     cached = cache.get(cache_key)
     if cached:
