@@ -351,6 +351,72 @@ with st.sidebar.expander("📜 My recent activity"):
                 f"`{ev.created_at.strftime('%Y-%m-%d %H:%M')}` — `{ev.kind}`"
             )
 
+with st.sidebar.expander("🔑 API tokens"):
+    from services.api_tokens import (
+        ApiTokenError,
+        issue as issue_api_token,
+        list_for_user as list_api_tokens,
+        revoke as revoke_api_token,
+    )
+    st.caption(
+        "Long-lived bearer tokens for the REST API "
+        "(`/v1/analyze`, `/v1/applications`, etc.). "
+        "Shown ONCE on creation — save it somewhere safe."
+    )
+    with st.form("new_api_token_form"):
+        col_n, col_t = st.columns(2)
+        with col_n:
+            api_name = st.text_input("Token name", placeholder="e.g. cli-laptop")
+        with col_t:
+            api_ttl = st.selectbox(
+                "Expiry", ["30 days", "90 days", "365 days", "Never"],
+            )
+        if st.form_submit_button("Create token", type="primary"):
+            try:
+                ttl_days = None if api_ttl == "Never" else int(api_ttl.split()[0])
+                issued = issue_api_token(
+                    st.session_state.user_id, api_name, ttl_days=ttl_days,
+                )
+                st.session_state["new_api_token_value"] = issued.raw_token
+                st.rerun()
+            except ApiTokenError as exc:
+                st.error(str(exc))
+
+    if st.session_state.get("new_api_token_value"):
+        st.warning(
+            "Copy this token NOW. You will not see it again — only the "
+            "8-char prefix remains in the list below."
+        )
+        st.code(st.session_state["new_api_token_value"], language=None)
+        if st.button("I've copied it"):
+            st.session_state.pop("new_api_token_value", None)
+            st.rerun()
+
+    tokens = list_api_tokens(st.session_state.user_id)
+    if tokens:
+        st.markdown("**Existing tokens**")
+        for t in tokens:
+            status = (
+                "revoked" if t.revoked_at else
+                "expired" if t.expires_at and t.expires_at <= __import__("datetime").datetime.utcnow() else
+                "active"
+            )
+            cols = st.columns([4, 1])
+            with cols[0]:
+                st.caption(
+                    f"`{t.prefix}…` · **{t.name}** · _{status}_"
+                    + (f" · last used {t.last_used_at.strftime('%Y-%m-%d')}"
+                       if t.last_used_at else "")
+                )
+            with cols[1]:
+                if status == "active":
+                    if st.button("Revoke", key=f"api_revoke_{t.id}"):
+                        try:
+                            revoke_api_token(st.session_state.user_id, t.id)
+                            st.rerun()
+                        except ApiTokenError as exc:
+                            st.error(str(exc))
+
 with st.sidebar.expander("🔐 Two-factor authentication"):
     if totp_is_enabled(st.session_state.user_id):
         remaining = totp_backup_codes_left(st.session_state.user_id)

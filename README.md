@@ -96,6 +96,28 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 19–22 (shipped) — async UX, hardened auth, sharing, public API
+- ✅ **Phase 19** — **background analyses** via Celery survive container
+  restarts and cross-session resume. `@st.fragment(run_every="5s")` card
+  polls Celery state without re-running the form. Terminal-state short-
+  circuit so polling stops once SUCCESS/FAILURE is reached.
+- ✅ **Phase 20** — **TOTP-based 2FA** with QR-code setup, 10 one-shot
+  backup codes (canonical form hashed, formatted XXXXX-XXXXX for display —
+  the bug fix that made tests catch the type of mistake the feature exists
+  to prevent), password-gated disable, full audit + rate-limit hooks.
+- ✅ **Phase 21** — **public read-only share links**. Owner picks expiry,
+  optionally bundles tailored artifacts, gets a URL. Anyone with the URL
+  sees a read-only view without an account. View counter + audit row on
+  every access so the owner sees who accessed when.
+- ✅ **Phase 22** — **REST API** at `/v1/*` via FastAPI: `/me`,
+  `/analyze`, `/applications`, `/cv`, `/analytics`, all bearer-token
+  authenticated. Tokens (`jos_…`) are bcrypt-hashed with an indexed 8-char
+  prefix for fast lookup. Cross-user reads return 404 (not 403) so the
+  API doesn't leak which IDs exist. `python -m api.main` runs uvicorn;
+  `/healthz` open without auth for liveness probes. **405 tests total** —
+  31 new in Phase 22 including all auth + scoping cases via
+  `fastapi.testclient.TestClient`.
+
 ### Phase 16–18 (shipped) — timelines, resumability, observability
 - ✅ **Phase 16** — `utils/diff.inline_diff_html` word-level diff with HTML
   ins/del spans (XSS-safe — user content escaped before insertion).

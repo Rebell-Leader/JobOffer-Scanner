@@ -353,6 +353,40 @@ class ApplicationArtifact(Base):
     )
 
 
+class ApiToken(Base):
+    """A long-lived bearer token for the REST API.
+
+    We never store the raw token — only its bcrypt hash. To make per-request
+    auth fast (without bcrypt-ing every row), we also store the first 8 chars
+    of the token as a public ``prefix`` column with an index. Auth flow:
+
+      1. Split the incoming token on its first 8 chars.
+      2. Look up by ``prefix``. Multiple rows possible in theory (collision
+         odds: ~1 in 64^8 ≈ 1 in 2.8e14) so we iterate the matches.
+      3. bcrypt-compare the full incoming token against each row's
+         ``token_hash``. First match wins.
+
+    A 8-char prefix keeps the rendering UI useful too — the "Active tokens"
+    list shows ``jos_AbCdEfGh…`` so the user can recognise which token to
+    revoke. ``last_used_at`` updates on successful auth so abandoned tokens
+    are easy to spot.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ApplicationShare(Base):
     """A read-only sharing token for one ``Application``.
 
@@ -409,6 +443,9 @@ AUDIT_KINDS = (
     "share.create",
     "share.revoke",
     "share.view",
+    "api_token.create",
+    "api_token.revoke",
+    "api_token.used",
 )
 
 
