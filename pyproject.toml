@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "joboffer-scanner"
 version = "0.2.0"
-description = "AI-assisted job-offer analysis platform (Phase 0: real LLM integration)"
+description = "AI-assisted job-offer analysis platform"
 requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13.0",
@@ -27,3 +31,13 @@ telegram = ["python-telegram-bot>=21.0"]
 worker = ["celery>=5.3.0", "redis>=5.0.0"]
 browser = ["playwright>=1.44.0"]
 pdf = ["fpdf2>=2.7.0"]
+
+# This is an APPLICATION, not an importable library. It's installed (pip
+# install -e . / uv sync) only to pull the dependencies above — the source is
+# imported from the repo root, which is on sys.path in every run context
+# (Streamlit runs from the repo root; the API/worker/bot are launched as
+# `python -m …` from the root; tests prepend the root). Telling setuptools
+# there are no modules to package disables flat-layout auto-discovery, which
+# otherwise errors out on our many top-level dirs (agents/, services/, db/, …).
+[tool.setuptools]
+py-modules = []
