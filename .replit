@@ -2,6 +2,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["cargo", "glibcLocales", "libiconv", "rustc"]
 
 [workflows]
 runButton = "Project"
@@ -36,3 +37,6 @@ run = ["sh", "-c", "streamlit run app.py"]
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[agent]
+integrations = ["streamlit_database:1.0.0"]
