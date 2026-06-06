@@ -40,3 +40,8 @@ externalPort = 80
 
 [agent]
 integrations = ["streamlit_database:1.0.0"]
+
+[userenv]
+
+[userenv.shared]
+OPENAI_FAST_MODEL = "gpt-5.5-mini"

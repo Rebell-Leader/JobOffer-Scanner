@@ -29,16 +29,16 @@ from typing import Optional
 # so model selection in the UI stays meaningful regardless of provider.
 TIER_MODELS = {
     "anthropic": {
-        "fast": "claude-haiku-4-5-20251001",
-        "detailed": "claude-sonnet-4-6",
+        "fast": os.getenv("ANTHROPIC_FAST_MODEL", "claude-haiku-4-5-20251001"),
+        "detailed": os.getenv("ANTHROPIC_DETAILED_MODEL", "claude-sonnet-4-6"),
     },
     "openai": {
-        "fast": "gpt-4o-mini",
-        "detailed": "gpt-4o",
+        "fast": os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini"),
+        "detailed": os.getenv("OPENAI_DETAILED_MODEL", "gpt-4o"),
     },
     "featherless": {
-        "fast": "Qwen/Qwen3-32B",
-        "detailed": "deepseek-ai/DeepSeek-R1-0528",
+        "fast": os.getenv("FEATHERLESS_FAST_MODEL", "Qwen/Qwen3-32B"),
+        "detailed": os.getenv("FEATHERLESS_DETAILED_MODEL", "deepseek-ai/DeepSeek-R1-0528"),
     },
 }
 

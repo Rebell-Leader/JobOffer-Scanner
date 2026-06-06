@@ -1423,7 +1423,7 @@ with applications_tab:
                             st.error(str(exc))
 
                 # Detailed add-stage form (date + notes + at_pipeline_stage).
-                with st.expander("➕ Add a stage with details"):
+                if st.checkbox("➕ Add a stage with details", key=f"stage_expand_{rec.id}"):
                     with st.form(f"stage_form_{rec.id}"):
                         stage_kind = st.selectbox(
                             "Stage",
