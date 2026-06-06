@@ -1,5 +1,7 @@
 import os
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 
 from agents.orchestrator import run_analysis
@@ -87,8 +89,14 @@ from services.telegram_link import (
 )
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
+from services.timeline import (
+    STAGE_COLORS,
+    cross_application_swimlane,
+    per_application_timeline,
+    points_to_records,
+)
 from utils.config import check_environment_setup, print_environment_status
-from utils.diff import unified_diff
+from utils.diff import inline_diff_html, unified_diff
 
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
@@ -758,6 +766,41 @@ with applications_tab:
                         except ApplicationError as exc:
                             st.error(str(exc))
 
+                # ----- Pipeline timeline -----
+                timeline_points = per_application_timeline(
+                    st.session_state.user_id, rec.id,
+                )
+                if timeline_points:
+                    st.markdown("##### 📅 Pipeline timeline")
+                    tl_df = pd.DataFrame(points_to_records(timeline_points))
+                    # Sort kinds by funnel order so Y axis reads top→bottom.
+                    kind_order = list(
+                        tl_df.sort_values("pipeline_index")["kind"].unique()
+                    )
+                    base = alt.Chart(tl_df).encode(
+                        x=alt.X("occurred_on:T", title="Date"),
+                        y=alt.Y("kind:N", sort=kind_order, title="Stage"),
+                        tooltip=[
+                            alt.Tooltip("kind:N", title="Stage"),
+                            alt.Tooltip("occurred_on:T", title="Date"),
+                            alt.Tooltip("notes:N", title="Notes"),
+                        ],
+                    )
+                    line = base.mark_line(color="#6c757d", strokeWidth=2)
+                    dots = base.mark_circle(size=180, stroke="white", strokeWidth=1.5).encode(
+                        color=alt.Color(
+                            "kind:N", legend=None,
+                            scale=alt.Scale(
+                                domain=list(STAGE_COLORS.keys()),
+                                range=list(STAGE_COLORS.values()),
+                            ),
+                        ),
+                    )
+                    st.altair_chart(
+                        (line + dots).properties(height=180),
+                        use_container_width=True,
+                    )
+
                 # ----- Pipeline stages -----
                 st.markdown("##### 🪜 Pipeline stages")
                 stages = list_stages(st.session_state.user_id, rec.id)
@@ -947,18 +990,35 @@ with applications_tab:
                                             if tone:
                                                 st.caption(f"tone: `{tone}`")
                                         st.markdown(art.content)
-                                with st.expander("📐 Show unified diff (A → B)"):
-                                    diff_text = unified_diff(
-                                        art_a.content, art_b.content,
-                                        before_label=f"#{art_a.id}",
-                                        after_label=f"#{art_b.id}",
+                                with st.expander("📐 Show diff (A → B)"):
+                                    view_key = f"art_diff_view_{rec.id}_{art_a.id}_{art_b.id}"
+                                    view = st.radio(
+                                        "View",
+                                        ["Inline", "Unified"],
+                                        horizontal=True,
+                                        key=view_key,
+                                        label_visibility="collapsed",
                                     )
-                                    if not diff_text.strip():
+                                    if art_a.content.strip() == art_b.content.strip():
                                         st.caption(
                                             "_Identical content — no diff to show._"
                                         )
+                                    elif view == "Unified":
+                                        st.code(
+                                            unified_diff(
+                                                art_a.content, art_b.content,
+                                                before_label=f"#{art_a.id}",
+                                                after_label=f"#{art_b.id}",
+                                            ),
+                                            language="diff",
+                                        )
                                     else:
-                                        st.code(diff_text, language="diff")
+                                        st.markdown(
+                                            inline_diff_html(
+                                                art_a.content, art_b.content,
+                                            ),
+                                            unsafe_allow_html=True,
+                                        )
 
                 if arts:
                     for a in arts:
@@ -1174,6 +1234,57 @@ with analytics_tab:
             st.subheader("Applications saved per week")
             st.line_chart(dash.volume_by_week)
 
+        # ----- Cross-application swimlane -----
+        swim = cross_application_swimlane(st.session_state.user_id)
+        if swim:
+            st.subheader("All applications — stage timeline")
+            st.caption(
+                "Each row is one application; each dot is a stage event. "
+                "Useful for spotting velocity differences and where applications "
+                "tend to stall."
+            )
+            swim_df = pd.DataFrame(points_to_records(swim))
+            # Order rows by earliest stage so newest activity is at the top.
+            label_order = (
+                swim_df.groupby("application_label")["occurred_on"]
+                .min()
+                .sort_values(ascending=False)
+                .index.tolist()
+            )
+            base = alt.Chart(swim_df).encode(
+                x=alt.X("occurred_on:T", title="Date"),
+                y=alt.Y(
+                    "application_label:N",
+                    sort=label_order,
+                    title=None,
+                    axis=alt.Axis(labelLimit=400),
+                ),
+                tooltip=[
+                    alt.Tooltip("application_label:N", title="Application"),
+                    alt.Tooltip("kind:N", title="Stage"),
+                    alt.Tooltip("occurred_on:T", title="Date"),
+                    alt.Tooltip("notes:N", title="Notes"),
+                ],
+            )
+            line_per_app = base.mark_line(color="#9aa0a6", strokeWidth=1).encode(
+                detail="application_label:N",
+            )
+            dots_per_app = base.mark_circle(size=130, stroke="white", strokeWidth=1.2).encode(
+                color=alt.Color(
+                    "kind:N", title="Stage",
+                    scale=alt.Scale(
+                        domain=list(STAGE_COLORS.keys()),
+                        range=list(STAGE_COLORS.values()),
+                    ),
+                ),
+            )
+            row_height = 28
+            chart_height = max(180, row_height * len(label_order) + 60)
+            st.altair_chart(
+                (line_per_app + dots_per_app).properties(height=chart_height),
+                use_container_width=True,
+            )
+
 
 # ---------------------------------------------------------------------------
 # CV & Projects tab
@@ -1309,6 +1420,14 @@ with cv_tab:
                             with st.expander("Preview", expanded=False):
                                 st.text(rev.raw_text[:2000] + ("…" if len(rev.raw_text) > 2000 else ""))
                             with st.expander("🔀 Diff against current", expanded=False):
+                                view_key = f"rev_diff_view_{rev.id}"
+                                view = st.radio(
+                                    "View",
+                                    ["Inline", "Unified"],
+                                    horizontal=True,
+                                    key=view_key,
+                                    label_visibility="collapsed",
+                                )
                                 diff_text = diff_revision_against_current(
                                     st.session_state.user_id, rev.id,
                                 )
@@ -1317,10 +1436,19 @@ with cv_tab:
                                         "_No textual differences from the "
                                         "current master CV._"
                                     )
-                                else:
-                                    # Streamlit colours +/- lines when we tag
-                                    # the code block as a diff.
+                                elif view == "Unified":
                                     st.code(diff_text, language="diff")
+                                else:
+                                    # Re-fetch the two raw bodies for the
+                                    # word-level highlighting; we already know
+                                    # they differ.
+                                    cv_now = get_master_cv(st.session_state.user_id)
+                                    st.markdown(
+                                        inline_diff_html(
+                                            rev.raw_text, cv_now.raw_text,
+                                        ),
+                                        unsafe_allow_html=True,
+                                    )
                         with rcol2:
                             armed_key = f"rev_restore_armed_{rev.id}"
                             if st.session_state.get(armed_key):
