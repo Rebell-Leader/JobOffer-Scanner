@@ -1,44 +1,33 @@
-from tools.job_tools import job_tools
 from typing import Dict
-from utils.llm import get_completion
+
+from tools.job_tools import analyze_requirements, extract_job_details
+
 
 def analyze(state: Dict) -> Dict:
     job_posting = state.get("job_posting", "")
-    manual_inputs = state.get("manual_inputs", {})
-    model = state.get("model", "deepseek-ai/DeepSeek-R1")
+    manual_inputs = state.get("manual_inputs") or {}
+    model = state.get("model", "detailed")
     progress_callback = state.get("progress_callback")
 
     try:
-        # If manual inputs are provided, use them directly
-        if manual_inputs and isinstance(manual_inputs, dict) and manual_inputs.get("company_name"):
-            print("Using manual inputs for job details")
-
-            # Create a structured job details object
-            job_details = {
-                "extracted_details": manual_inputs,
-                "requirements_analysis": job_tools[1].func(job_posting, model)
-            }
-
-            state["job_details"] = job_details
+        # Use manual inputs as the source-of-truth for the basics when provided.
+        # Still run requirements extraction on the description for skill detail.
+        if isinstance(manual_inputs, dict) and manual_inputs.get("company_name"):
+            extracted = dict(manual_inputs)
         else:
-            # Otherwise, use the automatic extraction
-            print("Using automatic extraction for job details")
-            job_details = job_tools[0].func(job_posting, model)
-            requirements_analysis = job_tools[1].func(job_posting, model)
+            extracted = extract_job_details(job_posting, model)
 
-            state["job_details"] = {
-                "extracted_details": job_details,
-                "requirements_analysis": requirements_analysis
-            }
+        requirements = analyze_requirements(job_posting, model)
+        state["job_details"] = {
+            "extracted_details": extracted,
+            "requirements_analysis": requirements,
+        }
 
-        # Call the progress callback if provided
         if progress_callback:
-            # Format requirements for display
-            tech_skills = state["job_details"].get("requirements_analysis", {}).get("technical_skills", [])
-            skills_summary = f"Found {len(tech_skills)} required technical skills"
-            progress_callback("job", 25, skills_summary)
+            tech_skills = requirements.get("technical_skills", []) if isinstance(requirements, dict) else []
+            progress_callback("job", 25, f"Found {len(tech_skills)} technical skills")
 
-    except Exception as e:
-        state["error"] = f"Job analysis failed: {str(e)}"
+    except Exception as exc:  # noqa: BLE001 - surfaced into pipeline state
+        state["error"] = f"Job analysis failed: {exc}"
 
     return state

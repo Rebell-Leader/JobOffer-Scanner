@@ -1,0 +1,244 @@
+"""Telegram bot handlers — pure logic, no telegram dependency at import time.
+
+Handlers are split out so they can be unit-tested without booting the
+``python-telegram-bot`` runtime. Each handler takes a small ``Reply`` callable
+(``async def(text: str) -> None``) instead of a real ``Update`` so tests can
+capture what would have been sent.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Optional
+
+from agents.orchestrator import run_analysis
+from services.analysis_runner import (
+    async_enabled,
+    enqueue_analysis,
+    get_async_result,
+)
+from services.telegram_link import (
+    TelegramLinkError,
+    complete_binding,
+    get_user_id_by_chat,
+    unlink,
+)
+from tools.url_ingest import fetch_job_posting, is_url
+
+logger = logging.getLogger(__name__)
+
+# Telegram caps messages at 4096 chars. We split on paragraph boundaries
+# whenever possible to keep markdown readable across chunks.
+_TELEGRAM_LIMIT = 4000
+
+
+Reply = Callable[[str], Awaitable[None]]
+
+
+@dataclass
+class AnalyzeInput:
+    """What the user typed after `/analyze`."""
+
+    url: Optional[str]
+    text: str
+
+
+def parse_analyze_args(raw: str) -> AnalyzeInput:
+    """Pull a URL (if present) out of the message; the rest is posting text."""
+    raw = (raw or "").strip()
+    if not raw:
+        return AnalyzeInput(url=None, text="")
+    first, _, rest = raw.partition("\n")
+    first = first.strip()
+    if is_url(first):
+        return AnalyzeInput(url=first, text=rest.strip())
+    if is_url(raw):
+        return AnalyzeInput(url=raw, text="")
+    return AnalyzeInput(url=None, text=raw)
+
+
+def chunk_for_telegram(text: str, limit: int = _TELEGRAM_LIMIT) -> list[str]:
+    """Split a long message into Telegram-sized pieces on paragraph breaks."""
+    if not text:
+        return []
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        # Prefer the last paragraph break inside the limit, then last newline,
+        # then a hard cut.
+        cut = remaining.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = remaining.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def format_summary(result: dict) -> str:
+    """Render a compact bot-friendly summary of an analysis result."""
+    if result.get("error"):
+        return f"❌ Analysis failed: {result['error']}"
+
+    job = (result.get("job_details") or {}).get("extracted_details") or {}
+    verdict = result.get("verdict") or {}
+    light = verdict.get("light", "yellow")
+    light_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(light, "⚪")
+    label = verdict.get("verdict", "Consider with Caution")
+    confidence = verdict.get("confidence")
+
+    lines = [
+        f"{light_emoji} *Verdict:* {label}"
+        + (f" (confidence {confidence}/10)" if confidence is not None else ""),
+        "",
+        f"*Company:* {job.get('company_name', '—')}",
+        f"*Title:* {job.get('job_title', '—')}",
+        f"*Location:* {job.get('location', '—')}",
+    ]
+    reasons = verdict.get("reasons") or []
+    if reasons:
+        lines.append("")
+        lines.append("*Top reasons:*")
+        for r in reasons[:3]:
+            lines.append(f"• {r}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = (
+    "I analyze job postings end-to-end and return a Green/Yellow/Red verdict.\n\n"
+    "*Usage:*\n"
+    "`/analyze <url>` — fetch a posting URL and analyze it\n"
+    "`/analyze\\n<paste posting text here>` — analyze pasted text\n"
+    "`/bind <token>` — link this chat to your web account (get the token from the web UI)\n"
+    "`/me` — show which account is linked to this chat\n"
+    "`/unbind` — disconnect this chat from your account\n"
+    "`/help` — show this message\n\n"
+    "Note: JS-heavy job boards (LinkedIn / Indeed / Glassdoor) often won't fetch — paste the text instead."
+)
+
+
+async def handle_start(reply: Reply, _args: str = "") -> None:
+    await reply(
+        "Hi! I'm the JobOffer Scanner bot. Send `/analyze` followed by a "
+        "URL or pasted job description to get a verdict.\n\n" + HELP_TEXT
+    )
+
+
+async def handle_help(reply: Reply, _args: str = "") -> None:
+    await reply(HELP_TEXT)
+
+
+async def handle_bind(reply: Reply, args: str, chat_id: int, chat_username: Optional[str] = None) -> None:
+    token = (args or "").strip().split()[0] if (args or "").strip() else ""
+    if not token:
+        await reply(
+            "Usage: `/bind <token>`. Get a token from the web UI's Telegram-link panel."
+        )
+        return
+    try:
+        await asyncio.to_thread(complete_binding, chat_id, token, chat_username)
+    except TelegramLinkError as exc:
+        await reply(f"❌ {exc}")
+        return
+    await reply(
+        "✅ Linked. You'll get a Telegram notification when a new stage is "
+        "added to any of your saved applications. Send `/unbind` to disconnect."
+    )
+
+
+async def handle_unbind(reply: Reply, args: str, chat_id: int) -> None:
+    user_id = await asyncio.to_thread(get_user_id_by_chat, chat_id)
+    if user_id is None:
+        await reply("This chat isn't linked to any account.")
+        return
+    removed = await asyncio.to_thread(unlink, user_id)
+    await reply("Disconnected." if removed else "Nothing to disconnect.")
+
+
+async def handle_me(reply: Reply, args: str, chat_id: int) -> None:
+    user_id = await asyncio.to_thread(get_user_id_by_chat, chat_id)
+    if user_id is None:
+        await reply("This chat isn't linked to any account. Send `/bind <token>` to connect.")
+        return
+    await reply(f"Linked to web account *#{user_id}*.")
+
+
+async def handle_analyze(reply: Reply, args: str) -> None:
+    parsed = parse_analyze_args(args)
+    if not parsed.url and not parsed.text:
+        await reply("Please include a URL or pasted posting text. " + HELP_TEXT)
+        return
+
+    posting_text = parsed.text
+    if parsed.url:
+        try:
+            await reply(f"Fetching {parsed.url} …")
+            posting_text = fetch_job_posting(parsed.url)
+        except ValueError as exc:
+            await reply(f"⚠️ {exc}")
+            if not parsed.text:
+                return
+
+    await reply("Analyzing — this can take 30-60 seconds…")
+    try:
+        result = await _run_analysis_for_bot(posting_text)
+    except Exception as exc:  # noqa: BLE001 - reported to user
+        logger.exception("Telegram analyze failed.")
+        await reply(f"❌ Analysis crashed: {exc}")
+        return
+
+    await reply(format_summary(result))
+    final = result.get("final_report") or ""
+    for chunk in chunk_for_telegram(final):
+        await reply(chunk)
+
+
+# ---------------------------------------------------------------------------
+# Execution: prefer Celery worker when available, fall back to in-process.
+# ---------------------------------------------------------------------------
+
+# Bot-level poll cadence + timeout for queued tasks.
+_BOT_POLL_INTERVAL = float(os.getenv("BOT_TASK_POLL_INTERVAL", "2.0"))
+_BOT_POLL_TIMEOUT = float(os.getenv("BOT_TASK_TIMEOUT", "600"))
+
+
+async def _run_analysis_for_bot(posting_text: str) -> dict:
+    """Pick the best execution path: async queue if available, else inline.
+
+    Async path: enqueue via Celery, then poll for completion off the event
+    loop so the bot stays responsive to other users while a long analysis
+    runs in the worker.
+    """
+    if async_enabled():
+        task_id = enqueue_analysis(posting_text, manual_inputs=None, model="fast")
+        if task_id is not None:
+            return await _await_task(task_id)
+    # Inline fallback. run_analysis is sync-blocking; offload it so the asyncio
+    # loop stays free to handle other commands while we wait.
+    return await asyncio.to_thread(
+        run_analysis, posting_text, None, "fast", None,
+    )
+
+
+async def _await_task(task_id: str) -> dict:
+    """Poll a Celery task to completion without blocking the event loop."""
+    deadline = time.monotonic() + _BOT_POLL_TIMEOUT
+    while time.monotonic() < deadline:
+        state, result = await asyncio.to_thread(get_async_result, task_id)
+        if state in ("SUCCESS",):
+            return result or {}
+        if state in ("FAILURE", "REVOKED"):
+            return {"error": f"Task {task_id} ended in state {state}: {result}"}
+        await asyncio.sleep(_BOT_POLL_INTERVAL)
+    return {"error": f"Analysis did not finish within {int(_BOT_POLL_TIMEOUT)}s."}

@@ -2,3 +2,12 @@
 headless = true
 address = "0.0.0.0"
 port = 5000
+# XSRF protection guards Streamlit's own widget callbacks. Keep it on; this
+# is the default, pinned here so a future edit doesn't silently disable it.
+enableXsrfProtection = true
+# CORS must stay off for XSRF protection to function (Streamlit ties the two
+# together). The app is same-origin, so this is correct.
+enableCORS = false
+# Don't gather usage stats from a self-hosted deployment.
+[browser]
+gatherUsageStats = false

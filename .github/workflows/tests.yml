@@ -1,0 +1,108 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: unittest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Telegram extra so the bot-handler tests can run.
+          pip install -e ".[telegram]"
+
+      - name: Show installed package versions
+        run: pip freeze | sort
+
+      - name: Run unit tests
+        # Strip any provider keys the CI environment may inject so the demo
+        # smoke test exercises the no-key path deterministically.
+        env:
+          ANTHROPIC_API_KEY: ""
+          OPENAI_API_KEY: ""
+          FEATHERLESS_API_KEY: ""
+          LLM_PROVIDER: ""
+        run: python -m unittest discover -s tests -v
+
+  migrations-postgres:
+    name: alembic up/down/up on Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: joboffer
+          POSTGRES_PASSWORD: joboffer
+          POSTGRES_DB: joboffer_ci
+        ports:
+          - 5432:5432
+        # Wait for the DB to be ready before the job's steps run.
+        options: >-
+          --health-cmd "pg_isready -U joboffer -d joboffer_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install "psycopg[binary]>=3.1"
+
+      - name: Migrate up, down to base, and back up (Postgres)
+        # SQLite's permissive DDL hides issues that Postgres enforces (real
+        # ALTER semantics, FK ordering, type strictness). Running the full
+        # up/down/up cycle here catches migrations that only work on SQLite.
+        env:
+          DATABASE_URL: postgresql+psycopg://joboffer:joboffer@localhost:5432/joboffer_ci
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+
+      - name: Verify final schema has the latest tables
+        env:
+          DATABASE_URL: postgresql+psycopg://joboffer:joboffer@localhost:5432/joboffer_ci
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, inspect
+          eng = create_engine(os.environ["DATABASE_URL"])
+          tables = set(inspect(eng).get_table_names())
+          required = {
+              "users", "applications", "application_stages",
+              "master_cvs", "projects", "application_artifacts",
+              "telegram_links", "audit_events", "background_analyses",
+              "user_two_factor", "application_shares", "api_tokens",
+              "webhooks", "webhook_deliveries", "oauth_identities",
+          }
+          missing = required - tables
+          assert not missing, f"missing tables after migrate: {missing}"
+          print(f"OK: {len(required)} expected tables present on Postgres")
+          PY

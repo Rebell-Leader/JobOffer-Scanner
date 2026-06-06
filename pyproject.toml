@@ -1,14 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "Add your description here"
+name = "joboffer-scanner"
+version = "0.2.0"
+description = "AI-assisted job-offer analysis platform"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.13.0",
+    "anthropic>=0.40.0",
+    "bcrypt>=4.1.0",
     "beautifulsoup4>=4.13.3",
+    "fastapi>=0.110.0",
     "langchain>=0.3.19",
     "langgraph>=0.3.1",
     "openai>=1.65.1",
+    "pyotp>=2.9.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
+    "qrcode>=7.4.0",
     "requests>=2.32.3",
+    "sqlalchemy>=2.0.30",
     "streamlit>=1.42.2",
-    "twilio>=9.4.6",
+    "uvicorn>=0.27.0",
 ]
+
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=21.0"]
+worker = ["celery>=5.3.0", "redis>=5.0.0"]
+browser = ["playwright>=1.44.0"]
+pdf = ["fpdf2>=2.7.0"]
+
+# This is an APPLICATION, not an importable library. It's installed (pip
+# install -e . / uv sync) only to pull the dependencies above — the source is
+# imported from the repo root, which is on sys.path in every run context
+# (Streamlit runs from the repo root; the API/worker/bot are launched as
+# `python -m …` from the root; tests prepend the root). Telling setuptools
+# there are no modules to package disables flat-layout auto-discovery, which
+# otherwise errors out on our many top-level dirs (agents/, services/, db/, …).
+[tool.setuptools]
+py-modules = []

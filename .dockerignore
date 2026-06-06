@@ -1,0 +1,16 @@
+.git
+.github
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+*.db
+*.sqlite*
+.env
+.env.*
+!.env.example
+tests/
+attached_assets/
+*.png
+.streamlit/secrets.toml
