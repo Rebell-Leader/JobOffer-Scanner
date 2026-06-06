@@ -108,10 +108,12 @@ from services.timeline import (
 )
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
+from utils.logging_setup import configure as configure_logging
 
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
 
+configure_logging()
 print_environment_status()
 init_db()
 
@@ -227,6 +229,17 @@ if "user_id" not in st.session_state:
 # ---------------------------------------------------------------------------
 
 st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
+
+with st.sidebar.expander("📜 My recent activity"):
+    from services.audit import list_for_user as _list_audit
+    events = _list_audit(st.session_state.user_id, limit=20)
+    if not events:
+        st.caption("_No recorded activity yet._")
+    else:
+        for ev in events:
+            st.caption(
+                f"`{ev.created_at.strftime('%Y-%m-%d %H:%M')}` — `{ev.kind}`"
+            )
 
 with st.sidebar.expander("🔒 Change password"):
     with st.form("change_pw_form"):

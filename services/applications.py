@@ -143,6 +143,13 @@ def delete_application(user_id: int, application_id: int) -> None:
             raise ApplicationError("Application not found.")
         session.delete(app)
         session.commit()
+    # Audit AFTER commit so a failed delete isn't recorded as if it happened.
+    from services.audit import record as _audit
+    _audit(
+        "application.delete",
+        user_id=user_id,
+        details={"application_id": application_id},
+    )
 
 
 # ---------------------------------------------------------------------------

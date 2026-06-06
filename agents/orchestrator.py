@@ -15,6 +15,7 @@ from services.checkpoint import (
     CheckpointPayload,
     get_store,
 )
+from utils.timing import timed_block
 
 
 class JobAnalysisState(TypedDict, total=False):
@@ -59,7 +60,8 @@ def _analyze_job_with_checkpoint(state: Dict) -> Dict:
         if cb:
             cb("job", 25, "Restored from checkpoint")
         return state
-    state = job_analyzer.analyze(state)
+    with timed_block("pipeline.stage", tags={"stage": "job"}):
+        state = job_analyzer.analyze(state)
     if not state.get("error"):
         _save_checkpoint(state, "job_details", state.get("job_details"))
     return state
@@ -94,12 +96,16 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
     worker_state = dict(state)
     worker_state["progress_callback"] = None
 
+    def _run(stage_name, fn, s):
+        with timed_block("pipeline.stage", tags={"stage": stage_name}):
+            return fn(s)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {}
         if not company_done:
-            futures["company"] = pool.submit(company_analyzer.analyze, dict(worker_state))
+            futures["company"] = pool.submit(_run, "company", company_analyzer.analyze, dict(worker_state))
         if not salary_done:
-            futures["salary"] = pool.submit(salary_analyzer.analyze, dict(worker_state))
+            futures["salary"] = pool.submit(_run, "salary", salary_analyzer.analyze, dict(worker_state))
         results = {name: f.result() for name, f in futures.items()}
 
     # Surface the first error from either branch — but persist whichever
@@ -133,7 +139,8 @@ def _analyze_resume_with_checkpoint(state: Dict) -> Dict:
     if ckpt.has("resume_analysis"):
         state["resume_analysis"] = ckpt.get("resume_analysis")
         return state
-    state = resume_analyzer.analyze(state)
+    with timed_block("pipeline.stage", tags={"stage": "resume"}):
+        state = resume_analyzer.analyze(state)
     if not state.get("error") and state.get("resume_analysis"):
         _save_checkpoint(state, "resume_analysis", state["resume_analysis"])
     return state
@@ -148,7 +155,8 @@ def _generate_report_with_checkpoint(state: Dict) -> Dict:
         state["final_report"] = bundle.get("final_report", "")
         state["verdict"] = bundle.get("verdict", {})
         return state
-    state = report_generator.generate(state)
+    with timed_block("pipeline.stage", tags={"stage": "report"}):
+        state = report_generator.generate(state)
     if not state.get("error"):
         _save_checkpoint(state, "verdict_and_report", {
             "final_report": state.get("final_report", ""),

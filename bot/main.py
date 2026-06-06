@@ -50,10 +50,8 @@ def main() -> int:
         )
         return 1
 
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.INFO,
-    )
+    from utils.logging_setup import configure as configure_logging
+    configure_logging()
 
     async def _start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_start(update.message.reply_markdown, _args="")

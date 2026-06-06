@@ -154,7 +154,9 @@ def complete_binding(
             link = existing
         session.commit()
         session.refresh(link)
-        return _to_record(link)
+    from services.audit import record as _audit
+    _audit("telegram.bind", user_id=link.user_id, details={"chat_id": chat_id})
+    return _to_record(link)
 
 
 def get_link(user_id: int) -> Optional[LinkRecord]:
@@ -183,7 +185,9 @@ def unlink(user_id: int) -> bool:
             return False
         session.delete(link)
         session.commit()
-        return True
+    from services.audit import record as _audit
+    _audit("telegram.unbind", user_id=user_id)
+    return True
 
 
 def set_notify_on_stage(user_id: int, enabled: bool) -> None:

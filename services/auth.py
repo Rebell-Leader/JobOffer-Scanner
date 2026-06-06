@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from db.models import PasswordResetToken, User
 from db.session import get_session
+from services.audit import record as _audit
 from services.rate_limit import (
     LOGIN_LIMITER,
     REGISTER_LIMITER,
@@ -85,6 +86,7 @@ def register_user(email: str, password: str) -> AuthedUser:
         session.add(user)
         session.commit()
         session.refresh(user)
+        _audit("user.register", user_id=user.id, details={"email": email})
         return AuthedUser(id=user.id, email=user.email)
 
 
@@ -101,9 +103,15 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
     with get_session() as session:
         user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if user is None or not _verify_password(password, user.password_hash):
+            _audit(
+                "user.login.failure",
+                user_id=user.id if user else None,
+                details={"email": email},
+            )
             raise AuthError("Invalid email or password.")
         # Clean break so a few past typos don't keep penalizing a legit login.
         LOGIN_LIMITER.reset(email)
+        _audit("user.login.success", user_id=user.id, details={"email": email})
         return AuthedUser(id=user.id, email=user.email)
 
 
@@ -125,6 +133,7 @@ def change_password(user_id: int, current_password: str, new_password: str) -> N
             raise AuthError("Current password is incorrect.")
         user.password_hash = _hash_password(new_password)
         session.commit()
+        _audit("user.password.change", user_id=user_id)
 
 
 def request_password_reset(email: str) -> Optional[str]:
@@ -156,6 +165,7 @@ def request_password_reset(email: str) -> Optional[str]:
             )
         )
         session.commit()
+        _audit("user.password.reset.request", user_id=user.id, details={"email": email})
         return raw_token
 
 
@@ -194,3 +204,4 @@ def complete_password_reset(email: str, token: str, new_password: str) -> None:
         match.used_at = datetime.utcnow()
         user.password_hash = _hash_password(new_password)
         session.commit()
+        _audit("user.password.reset.complete", user_id=user.id)

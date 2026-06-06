@@ -411,3 +411,9 @@ def delete_artifact(user_id: int, artifact_id: int) -> None:
             raise TailoringError("Artifact not found.")
         session.delete(a)
         session.commit()
+    from services.audit import record as _audit
+    _audit(
+        "artifact.delete",
+        user_id=user_id,
+        details={"artifact_id": artifact_id},
+    )

@@ -96,6 +96,40 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 16–18 (shipped) — timelines, resumability, observability
+- ✅ **Phase 16** — `utils/diff.inline_diff_html` word-level diff with HTML
+  ins/del spans (XSS-safe — user content escaped before insertion).
+  `services/timeline` builds per-application + cross-application swimlane
+  data; UI renders both via Altair with palette-colored dots and connecting
+  lines. Inline/Unified toggle on every diff surface.
+- ✅ **Phase 17** — `services/checkpoint` lets the orchestrator skip
+  already-completed stages on retry. When the salary stage 502s, the user
+  re-submits and only the missing stages re-run (verified end-to-end).
+  `services/reminders` + `worker/reminders` send a Telegram summary of
+  applications that haven't moved within the user's threshold; per-app
+  snooze + per-user threshold settings.
+- ✅ **Phase 18** — observability stack:
+  - **Structured JSON logging** (`utils/logging_setup.py`) with
+    contextvar-based `request_id` that threads through nested calls.
+    `LOG_FORMAT=json` switches to machine-readable; default is human-
+    friendly. Configurable in `app.py`, `bot/main.py`, `worker/*`.
+  - **Metrics registry** (`utils/metrics.py`) — in-process counters +
+    histograms with snapshot dump. Bounded memory (1000 samples per
+    histogram). CLI `python -m worker.metrics_dump [--json]`.
+  - **Timing wrapper** (`utils/timing.timed_block`) emits one log line and
+    one histogram observation per operation; auto-tags errors. Wired into
+    the LLM client (`provider`, `model` tags) and every pipeline stage
+    (`stage` tag), so error rate per provider and p95 stage latency are
+    derivable from a snapshot.
+  - **Audit log** (`db.models.AuditEvent` + `services/audit.py`,
+    migration `f7cd19cbca6e`) records security-sensitive events:
+    register / login (success+failure) / password change / reset
+    request+complete / application delete / artifact delete / telegram
+    bind+unbind. Captures the contextvar request_id so audit rows join
+    cleanly to log lines. `audit.record` never raises into the caller.
+  - **Per-user audit viewer** in the sidebar.
+- ✅ 76 new tests across the three phases. Full suite **314/314 green**.
+
 ### Phase 14–15 (shipped) — diff views, PDF for master CV, Telegram linking + notifications
 - ✅ **Phase 14** — `utils/diff.py` produces unified diffs that
   ``st.code(language="diff")`` syntax-highlights. The master CV revision

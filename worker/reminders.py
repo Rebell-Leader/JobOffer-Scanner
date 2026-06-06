@@ -30,10 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.INFO,
-    )
+    from utils.logging_setup import configure as configure_logging
+    configure_logging()
     init_db()
     sent = send_inactivity_reminders(user_id=args.user)
     logging.info("Reminder run complete: %d notifications sent.", sent)

@@ -135,18 +135,26 @@ def get_completion(
     resolved_model = resolve_model(provider, model)
     system_prompt = system or _DEFAULT_SYSTEM_PROMPT
 
+    # Local import keeps utils/timing -> utils/metrics -> utils/llm cycle-free
+    # for the (uncommon) callers that import the LLM client transitively.
+    from utils.timing import timed_block
+
     last_error: Optional[Exception] = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            if provider == "anthropic":
-                text = _complete_anthropic(
-                    prompt, resolved_model, system_prompt, temperature, max_tokens
-                )
-            else:  # openai or featherless share the OpenAI-compatible client
-                text = _complete_openai_compatible(
-                    provider, prompt, resolved_model, system_prompt,
-                    temperature, max_tokens,
-                )
+            with timed_block(
+                "llm.request",
+                tags={"provider": provider, "model": resolved_model},
+            ):
+                if provider == "anthropic":
+                    text = _complete_anthropic(
+                        prompt, resolved_model, system_prompt, temperature, max_tokens
+                    )
+                else:  # openai or featherless share the OpenAI-compatible client
+                    text = _complete_openai_compatible(
+                        provider, prompt, resolved_model, system_prompt,
+                        temperature, max_tokens,
+                    )
             return _strip_reasoning_tokens(text)
         except Exception as exc:  # noqa: BLE001 - retried/surfaced below
             last_error = exc

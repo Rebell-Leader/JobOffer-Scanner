@@ -311,6 +311,52 @@ class ApplicationArtifact(Base):
 
 
 # ---------------------------------------------------------------------------
+# Audit log — security-sensitive events worth a paper trail
+# ---------------------------------------------------------------------------
+
+# Canonical kinds. New entries should be added explicitly (don't accept free
+# strings) so the dashboards stay parseable.
+AUDIT_KINDS = (
+    "user.register",
+    "user.login.success",
+    "user.login.failure",
+    "user.password.change",
+    "user.password.reset.request",
+    "user.password.reset.complete",
+    "application.delete",
+    "telegram.bind",
+    "telegram.unbind",
+    "artifact.delete",
+)
+
+
+class AuditEvent(Base):
+    """One row per security-relevant action.
+
+    ``user_id`` is nullable so failed-login attempts against unknown emails
+    can still be recorded for rate-monitoring purposes. ``details`` is a
+    JSON column for kind-specific context (the email that was tried, the
+    application_id, the artifact_id, etc.). ``ip`` is reserved for future
+    use; Streamlit doesn't expose client IP cleanly, but behind a reverse
+    proxy a sidecar can populate it.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    request_id: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Telegram link — pairs a web user to a Telegram chat for notifications
 # ---------------------------------------------------------------------------
 
