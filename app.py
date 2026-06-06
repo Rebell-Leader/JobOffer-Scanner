@@ -15,6 +15,15 @@ from services.applications import (
     save_analysis,
     update_status,
 )
+from services.bulk_import import (
+    BulkImportError,
+    parse_applications_csv,
+    parse_applications_freeform,
+    parse_projects_csv,
+    parse_projects_freeform,
+    save_applications,
+    save_projects,
+)
 from services.master_cv import (
     MasterCVError,
     delete_master_cv,
@@ -501,6 +510,90 @@ with analyze_tab:
 # ---------------------------------------------------------------------------
 
 with applications_tab:
+    # Bulk import lives at the top so a new user can light up analytics by
+    # importing their history before they've saved anything in-app.
+    with st.expander("📥 Import past applications"):
+        st.caption(
+            "Bootstrap your analytics by importing applications you've "
+            "already sent. Paste a CSV (`company_name,job_title,location,"
+            "applied_on,status,verdict,notes`) or any free-form list. "
+            "Previews always render before saving — you approve the final list."
+        )
+        app_csv_tab, app_free_tab = st.tabs(["CSV", "Free-form (LLM)"])
+        with app_csv_tab:
+            app_csv = st.text_area(
+                "CSV text",
+                height=150,
+                key="app_import_csv",
+                placeholder=(
+                    "company_name,job_title,location,applied_on,status,verdict,notes\n"
+                    "Acme,ML Engineer,Berlin,2026-03-12,interviewing,Recommended,\n"
+                ),
+            )
+            if st.button("Preview from CSV", key="app_csv_preview"):
+                try:
+                    st.session_state["app_import_previews"] = parse_applications_csv(app_csv)
+                except BulkImportError as exc:
+                    st.error(str(exc))
+        with app_free_tab:
+            app_free = st.text_area(
+                "Paste a list of applications",
+                height=200,
+                key="app_import_free",
+                placeholder="Anything: a list of past applications with dates, statuses, notes…",
+            )
+            if st.button("Parse with LLM", key="app_free_preview"):
+                with st.spinner("Parsing applications…"):
+                    try:
+                        st.session_state["app_import_previews"] = parse_applications_freeform(app_free)
+                    except BulkImportError as exc:
+                        st.error(str(exc))
+
+        app_previews = st.session_state.get("app_import_previews") or []
+        if app_previews:
+            st.markdown(f"**Preview — {len(app_previews)} application(s) detected**")
+            ap_keep = []
+            for idx, p in enumerate(app_previews):
+                cols = st.columns([1, 6])
+                with cols[0]:
+                    chosen = st.checkbox(
+                        "Include",
+                        value=True,
+                        key=f"app_keep_{idx}",
+                        label_visibility="collapsed",
+                    )
+                with cols[1]:
+                    applied_str = (
+                        p["applied_on"].isoformat() if p.get("applied_on") else "—"
+                    )
+                    st.markdown(
+                        f"**{p['job_title']}** @ {p['company_name']} · "
+                        f"_{p['status']}_ · applied {applied_str}"
+                    )
+                    if p.get("location"):
+                        st.caption(p["location"])
+                    if p.get("notes"):
+                        st.caption(p["notes"])
+                if chosen:
+                    ap_keep.append(p)
+            col_s, col_c = st.columns(2)
+            if col_s.button(
+                f"💾 Import {len(ap_keep)} application(s)",
+                type="primary",
+                key="app_import_save",
+                disabled=(len(ap_keep) == 0),
+            ):
+                ids = save_applications(st.session_state.user_id, ap_keep)
+                st.session_state.pop("app_import_previews", None)
+                st.success(
+                    f"Imported {len(ids)} application(s). "
+                    "Analytics will reflect them on the next refresh."
+                )
+                st.rerun()
+            if col_c.button("Discard preview", key="app_import_clear"):
+                st.session_state.pop("app_import_previews", None)
+                st.rerun()
+
     records = list_applications(st.session_state.user_id)
 
     # Empty state — give new users a clear next step instead of a blank page.
@@ -1117,6 +1210,83 @@ with cv_tab:
             f"{len(projects)} project(s) in your gallery. Tailored CVs may "
             "select and reframe these for relevance — they will not invent new ones."
         )
+
+        with st.expander("📥 Bulk import projects"):
+            st.caption(
+                "Paste a CSV (`title,role,tech_stack,summary,highlights,url`) "
+                "or any free-form portfolio dump — we'll preview before saving. "
+                "Imports are never auto-persisted; you approve the final list."
+            )
+            import_tab_csv, import_tab_free = st.tabs(["CSV", "Free-form (LLM)"])
+
+            with import_tab_csv:
+                csv_text = st.text_area(
+                    "CSV text",
+                    height=150,
+                    key="proj_import_csv",
+                    placeholder="title,role,tech_stack,summary,highlights,url\nRecsys,Lead,Python|PyTorch,...,Used by 10M users|1.2k stars,https://...",
+                )
+                if st.button("Preview from CSV", key="proj_csv_preview"):
+                    try:
+                        st.session_state["proj_import_previews"] = parse_projects_csv(csv_text)
+                    except BulkImportError as exc:
+                        st.error(str(exc))
+
+            with import_tab_free:
+                free_text = st.text_area(
+                    "Paste a portfolio dump",
+                    height=200,
+                    key="proj_import_free",
+                    placeholder="Anything goes — a list of projects, a portfolio paragraph, GitHub README content…",
+                )
+                if st.button("Parse with LLM", key="proj_free_preview"):
+                    with st.spinner("Parsing projects…"):
+                        try:
+                            st.session_state["proj_import_previews"] = parse_projects_freeform(free_text)
+                        except BulkImportError as exc:
+                            st.error(str(exc))
+
+            previews = st.session_state.get("proj_import_previews") or []
+            if previews:
+                st.markdown(f"**Preview — {len(previews)} project(s) detected**")
+                keep = []
+                for idx, p in enumerate(previews):
+                    cols = st.columns([1, 6])
+                    with cols[0]:
+                        chosen = st.checkbox(
+                            "Include",
+                            value=True,
+                            key=f"proj_keep_{idx}",
+                            label_visibility="collapsed",
+                        )
+                    with cols[1]:
+                        st.markdown(
+                            f"**{p['title']}**"
+                            + (f" — {p['role']}" if p.get("role") else "")
+                        )
+                        if p.get("tech_stack"):
+                            st.caption(f"Tech: {p['tech_stack']}")
+                        if p.get("summary"):
+                            st.caption(p["summary"])
+                        if p.get("highlights"):
+                            for h in p["highlights"]:
+                                st.write(f"- {h}")
+                    if chosen:
+                        keep.append(p)
+                col_save, col_clear = st.columns(2)
+                if col_save.button(
+                    f"💾 Save {len(keep)} project(s)",
+                    type="primary",
+                    key="proj_import_save",
+                    disabled=(len(keep) == 0),
+                ):
+                    saved = save_projects(st.session_state.user_id, keep)
+                    st.session_state.pop("proj_import_previews", None)
+                    st.success(f"Imported {len(saved)} project(s).")
+                    st.rerun()
+                if col_clear.button("Discard preview", key="proj_import_clear"):
+                    st.session_state.pop("proj_import_previews", None)
+                    st.rerun()
 
         with st.expander("➕ Add a project"):
             with st.form("add_project_form"):

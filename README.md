@@ -96,6 +96,38 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 11–13 (shipped) — closing the loop + onboarding speed-ups
+- ✅ **Phase 11** — soft suggestions on flagged tailored artifacts
+  (`services/suggestions.py`): each skill flag offers a one-click "Add to my
+  master CV" that performs the edit through `apply_skill_addition` and
+  re-runs the check in one go. Year / percentage / quantitative flags are
+  deliberately NOT one-click (auto-appending those would invite the exact
+  fabrication the checker exists to prevent). Master CV gains versioned
+  revisions (`MasterCVRevision`): every content change snapshots the prior
+  version with a reason tag; restore is itself reversible. Migration
+  `a3b401ffdd58`.
+- ✅ **Phase 12** — PDF export for tailored CVs / cover letters
+  (`services/pdf_export.py`). Pure-Python via `fpdf2` (`[pdf]` extra); UI
+  surfaces `.md` and `.pdf` download buttons in parallel. Em dashes / smart
+  quotes / emoji map to ASCII so the built-in Helvetica font renders cleanly.
+  Two real fpdf2 quirks caught during development and documented inline:
+  `multi_cell(0,...)` leaves cursor at the right margin (so reset X every
+  line) and mixing `write()` with `multi_cell()` breaks across versions
+  (so inline `**bold**` is stripped — headings still bold).
+- ✅ **Phase 13** — bulk import for projects + past applications
+  (`services/bulk_import.py`). CSV path for structured data; LLM-parsed
+  free-form path with the same "do not invent" constraint and untrusted
+  wrapping as the tailoring prompts. Imports never auto-persist — always a
+  preview-then-approve step. **Caught a real bug** during the e2e: importing
+  a `rejected`/`offer`/`interviewing` application would silently downgrade
+  to `applied` because the stage-event auto-sync overwrote the imported
+  status. Fixed by materialising the *correct* stage events that match the
+  imported status (e.g. `interviewing` → `applied` + `phone_screen`,
+  `offer` → `applied` + `offer_received`). End-to-end verified: importing
+  4 past applications immediately lights up the funnel, verdict→outcome
+  correlation, and rejection-stage charts.
+- ✅ Phase 11–13 add 47 unit tests; full suite **209/209 green**.
+
 ### Phase 10 (shipped) — deterministic constraint-violation detector + tone presets
 - ✅ **Constraint checker** (`services/constraint_check.py`) — runs after every
   tailored generation. Extracts skill-shaped tokens, years, percentages, and
