@@ -1,60 +1,74 @@
 
 import os
-from typing import Dict, List
+from typing import Dict, List, Union
 
-def check_environment_setup() -> Dict[str, bool]:
+from utils.llm import get_active_provider, is_demo_mode, TIER_MODELS
+
+
+def check_environment_setup() -> Dict[str, Union[bool, str, None]]:
+    """Check environment/configuration status.
+
+    Demo mode is driven by the SAME logic the LLM layer uses, so the UI badge
+    can never claim "Production" while the LLM layer is actually returning
+    sample data (the previous OPENAI_API_KEY vs FEATHERLESS_API_KEY mismatch).
     """
-    Check if environment variables and configuration are properly set.
-    Returns status of different components.
-    """
-    status = {
-        "openai_api_key": bool(os.getenv("OPENAI_API_KEY")),
+    provider = get_active_provider()
+    return {
+        "llm_provider": provider,                 # e.g. "anthropic" or None
+        "llm_configured": provider is not None,
         "database_url": bool(os.getenv("DATABASE_URL")),
-        "demo_mode": not bool(os.getenv("OPENAI_API_KEY")),  # True if no API key
+        "demo_mode": is_demo_mode(),
     }
-    return status
+
 
 def get_missing_configs() -> List[str]:
-    """Get list of missing configuration items for production."""
+    """List configuration items missing for full production operation."""
     missing = []
-    
-    if not os.getenv("OPENAI_API_KEY"):
-        missing.append("OPENAI_API_KEY - Required for LLM functionality")
-    
-    # Future API integrations
+
+    if is_demo_mode():
+        missing.append(
+            "LLM API key - set ANTHROPIC_API_KEY, OPENAI_API_KEY, or "
+            "FEATHERLESS_API_KEY to enable real analysis"
+        )
+
+    if not os.getenv("DATABASE_URL"):
+        missing.append("DATABASE_URL - required for persistence (Phase 3)")
+
+    # External data sources still to be integrated (Phase 1).
     future_apis = [
-        "ALPHA_VANTAGE_API_KEY - For company financial data",
-        "GLASSDOOR_API_KEY - For salary and company reviews", 
-        "NUMBEO_API_KEY - For cost of living data",
-        "NEWS_API_KEY - For company news and layoff data"
+        "NEWS_API_KEY - real company news & layoff signals",
+        "Salary/COL data source - real benchmarking (e.g. Numbeo, levels.fyi)",
     ]
     missing.extend(future_apis)
-    
     return missing
 
+
 def print_environment_status():
-    """Print current environment configuration status."""
-    print("\n" + "="*50)
+    """Print current environment configuration status to the console."""
+    print("\n" + "=" * 50)
     print("AI JOB ANALYSIS PLATFORM - ENVIRONMENT STATUS")
-    print("="*50)
-    
+    print("=" * 50)
+
     status = check_environment_setup()
-    
+
     if status["demo_mode"]:
-        print("🔄 DEMO MODE: Using simulated data and mock responses")
-        print("📝 To enable real API calls, add API keys to environment")
+        print("DEMO MODE: no LLM key configured — using sample data")
+        print("Set ANTHROPIC_API_KEY / OPENAI_API_KEY / FEATHERLESS_API_KEY for real analysis")
     else:
-        print("🚀 PRODUCTION MODE: Using real API endpoints")
-    
-    print(f"\n📊 Configuration Status:")
+        provider = status["llm_provider"]
+        models = TIER_MODELS.get(provider, {})
+        print(f"PRODUCTION MODE: provider='{provider}'")
+        print(f"  fast='{models.get('fast')}'  detailed='{models.get('detailed')}'")
+
+    print("\nConfiguration status:")
     for key, value in status.items():
-        symbol = "✅" if value else "❌"
-        print(f"  {symbol} {key.replace('_', ' ').title()}")
-    
+        symbol = "OK" if value else "--"
+        print(f"  [{symbol}] {key.replace('_', ' ').title()}: {value}")
+
     missing = get_missing_configs()
     if missing:
-        print(f"\n📋 Missing Configurations for Full Production:")
+        print("\nMissing configurations for full production:")
         for item in missing:
-            print(f"  • {item}")
-    
-    print("="*50 + "\n")
+            print(f"  - {item}")
+
+    print("=" * 50 + "\n")

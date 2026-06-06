@@ -1,55 +1,240 @@
-from openai import OpenAI
-from typing import Dict, Optional
-import os
-import json
+"""Provider-agnostic LLM client.
 
-# Initialize OpenAI client with Featherless API
-# For demo purposes, we will use mock responses if the API key is not set.
-# In a production environment, ensure FEATHERLESS_API_KEY is set.
-client = OpenAI(
-    base_url="https://api.featherless.ai/v1",
-    api_key=os.getenv("FEATHERLESS_API_KEY"),
-    timeout=30.0  # Add timeout to prevent hanging
+Supports Anthropic Claude, OpenAI, and any OpenAI-compatible endpoint
+(e.g. Featherless). The active provider is auto-detected from whichever API
+key is present, and can be forced with the ``LLM_PROVIDER`` env var.
+
+Key behavioural guarantees (the Phase-0 fix):
+  * When a provider key IS set, ``get_completion`` makes a REAL API call with
+    retries. On persistent failure it RAISES — it never silently substitutes
+    fabricated data for a real request. Failures surface to the user.
+  * When NO provider key is set, the app runs in honest "demo mode" and returns
+    clearly-bounded sample data so the pipeline can be showcased. The UI badge
+    reflects this.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import time
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Provider configuration
+# ---------------------------------------------------------------------------
+
+# Each provider exposes a "fast" and a "detailed" model tier. Callers pass a
+# logical tier ("fast"/"detailed") and we resolve it for the active provider,
+# so model selection in the UI stays meaningful regardless of provider.
+TIER_MODELS = {
+    "anthropic": {
+        "fast": "claude-haiku-4-5-20251001",
+        "detailed": "claude-sonnet-4-6",
+    },
+    "openai": {
+        "fast": "gpt-4o-mini",
+        "detailed": "gpt-4o",
+    },
+    "featherless": {
+        "fast": "Qwen/Qwen3-32B",
+        "detailed": "deepseek-ai/DeepSeek-R1-0528",
+    },
+}
+
+# Provider -> (env var holding the API key, model-id prefixes that belong to it)
+_PROVIDER_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "featherless": "FEATHERLESS_API_KEY",
+}
+
+# Order in which we auto-detect a provider when LLM_PROVIDER is unset.
+_AUTODETECT_ORDER = ["anthropic", "openai", "featherless"]
+
+_FEATHERLESS_BASE_URL = "https://api.featherless.ai/v1"
+
+DEFAULT_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
+DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+
+
+def get_active_provider() -> Optional[str]:
+    """Return the active provider name, or ``None`` if no key is configured.
+
+    Respects an explicit ``LLM_PROVIDER`` override; otherwise picks the first
+    provider (in autodetect order) whose API key is present.
+    """
+    forced = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if forced:
+        if forced not in _PROVIDER_KEYS:
+            raise ValueError(
+                f"LLM_PROVIDER={forced!r} is not supported. "
+                f"Choose one of: {', '.join(_PROVIDER_KEYS)}."
+            )
+        return forced if os.getenv(_PROVIDER_KEYS[forced]) else None
+
+    for provider in _AUTODETECT_ORDER:
+        if os.getenv(_PROVIDER_KEYS[provider]):
+            return provider
+    return None
+
+
+def is_demo_mode() -> bool:
+    """True when no provider key is configured (sample data will be used)."""
+    return get_active_provider() is None
+
+
+def resolve_model(provider: str, requested: Optional[str]) -> str:
+    """Map a requested tier or explicit model id to a concrete model id.
+
+    Accepts logical tiers ("fast"/"detailed"), an explicit model id, or None.
+    Explicit ids that plainly belong to a different provider are discarded in
+    favour of the provider's "detailed" tier so legacy callers don't send, say,
+    a DeepSeek id to Anthropic.
+    """
+    tiers = TIER_MODELS[provider]
+    if not requested:
+        return tiers["detailed"]
+
+    req = requested.strip()
+    if req in tiers:
+        return tiers[req]
+
+    # Explicit model id — keep it only if it plausibly matches this provider.
+    if provider == "anthropic" and not req.startswith("claude"):
+        return tiers["detailed"]
+    if provider == "openai" and not (req.startswith("gpt") or req.startswith("o")):
+        return tiers["detailed"]
+    return req
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def get_completion(
+    prompt: str,
+    model: Optional[str] = None,
+    system: Optional[str] = None,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> str:
+    """Get a completion from the active LLM provider.
+
+    ``model`` may be a logical tier ("fast"/"detailed") or an explicit model id.
+    In demo mode (no key configured) this returns bounded sample data. With a
+    key configured it performs a real, retried API call and raises on failure.
+    """
+    provider = get_active_provider()
+
+    if provider is None:
+        print("[llm] Demo mode (no provider key set) — returning sample data.")
+        return generate_sample_response(prompt)
+
+    resolved_model = resolve_model(provider, model)
+    system_prompt = system or _DEFAULT_SYSTEM_PROMPT
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            if provider == "anthropic":
+                text = _complete_anthropic(
+                    prompt, resolved_model, system_prompt, temperature, max_tokens
+                )
+            else:  # openai or featherless share the OpenAI-compatible client
+                text = _complete_openai_compatible(
+                    provider, prompt, resolved_model, system_prompt,
+                    temperature, max_tokens,
+                )
+            return _strip_reasoning_tokens(text)
+        except Exception as exc:  # noqa: BLE001 - retried/surfaced below
+            last_error = exc
+            print(f"[llm] {provider} call failed (attempt {attempt}/{_MAX_RETRIES}): {exc}")
+            if attempt < _MAX_RETRIES:
+                time.sleep(2 ** (attempt - 1))  # 1s, 2s, 4s ...
+
+    # Honest failure: do NOT fabricate data for a real request.
+    raise RuntimeError(
+        f"LLM request to provider '{provider}' (model '{resolved_model}') failed "
+        f"after {_MAX_RETRIES} attempts: {last_error}"
+    )
+
+
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a meticulous job-market analyst. Respond exactly in the format the "
+    "user requests. When asked for JSON, return only valid JSON with no prose or "
+    "markdown fences. Base your analysis strictly on the information provided; "
+    "clearly label any figure you estimate as an estimate rather than a fact."
 )
 
-def get_llm_client() -> OpenAI:
-    """Get the OpenAI client instance."""
-    return client
 
-def get_completion(prompt: str, model: str = "deepseek-ai/DeepSeek-R1-0528") -> str:
-    """
-    Get completion from LLM with proper error handling.
-    Falls back to mock responses when API keys are not available or in demo mode.
-    """
-    try:
-        # Check if the API key is set for the Featherless client
-        api_key = os.getenv("FEATHERLESS_API_KEY")
+# ---------------------------------------------------------------------------
+# Provider implementations (SDKs imported lazily so an unused provider's
+# package being absent never breaks the active path).
+# ---------------------------------------------------------------------------
 
-        if not api_key:
-            print(f"No FEATHERLESS_API_KEY found - using mock response for model: {model}")
-            return generate_mock_response(prompt, model)
+def _complete_anthropic(prompt, model, system, temperature, max_tokens) -> str:
+    from anthropic import Anthropic  # lazy import
 
-        # In a real scenario, you would use the client here.
-        # For demo purposes, we'll still fall back to mock responses to show functionality.
-        print(f"Demo mode - using mock response for model: {model}")
-        return generate_mock_response(prompt, model)
+    # The SDK reads ANTHROPIC_API_KEY and (optionally) ANTHROPIC_BASE_URL itself.
+    client = Anthropic()
+    resp = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    parts = [block.text for block in resp.content if getattr(block, "type", None) == "text"]
+    return "".join(parts).strip()
 
-    except Exception as e:
-        print(f"LLM API Error: {str(e)}")
-        # Return a mock error message that explains the issue
-        return generate_mock_response(prompt, model) # Fallback to mock on any exception
 
-def generate_mock_response(prompt: str, model: str) -> str:
-    """
-    Generate realistic mock responses for demo purposes.
-    This simulates actual API responses for different types of analysis.
-    """
+def _complete_openai_compatible(
+    provider, prompt, model, system, temperature, max_tokens
+) -> str:
+    from openai import OpenAI  # lazy import
+
+    if provider == "featherless":
+        client = OpenAI(
+            base_url=_FEATHERLESS_BASE_URL,
+            api_key=os.getenv("FEATHERLESS_API_KEY"),
+            timeout=60.0,
+        )
+    else:  # openai
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0)
+
+    resp = client.chat.completions.create(
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def _strip_reasoning_tokens(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks emitted by some models."""
+    if not text:
+        return text
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+# ---------------------------------------------------------------------------
+# Demo-mode sample data (used ONLY when no provider key is configured).
+# Kept structurally valid so the end-to-end pipeline renders for showcasing.
+# ---------------------------------------------------------------------------
+
+def generate_sample_response(prompt: str) -> str:
+    """Return bounded sample data for demo mode. Not used when a key is set."""
     prompt_lower = prompt.lower()
 
-    # Job details extraction
-    if "extract key information" in prompt_lower and "job posting" in prompt_lower:
+    if "extract key information" in prompt_lower or "extract key" in prompt_lower:
         return """{
-            "company_name": "TechCorp Inc.",
+            "company_name": "Sample Corp (DEMO)",
             "job_title": "Senior AI Engineer",
             "location": "San Francisco, CA (Remote Friendly)",
             "experience_level": "5+ years in ML/AI",
@@ -64,8 +249,7 @@ def generate_mock_response(prompt: str, model: str) -> str:
             ]
         }"""
 
-    # Requirements analysis
-    elif "analyze the requirements" in prompt_lower:
+    if "analyze the requirements" in prompt_lower:
         return """{
             "technical_skills": [
                 "Python (Expert level required)",
@@ -92,126 +276,63 @@ def generate_mock_response(prompt: str, model: str) -> str:
             ]
         }"""
 
-    # Company analysis
-    elif "company" in prompt_lower and ("financial" in prompt_lower or "stability" in prompt_lower):
-        return """## Company Financial Stability Analysis
+    if "company" in prompt_lower and ("financial" in prompt_lower or "stability" in prompt_lower):
+        return """## Company Stability Analysis (DEMO DATA)
 
-**Overall Assessment: POSITIVE**
+> **Demo mode** — sample data, not a real assessment. Configure an API key for live analysis.
+
+**Overall Assessment: POSITIVE (sample)**
 
 ### Financial Health
-- **Revenue Growth**: 25% year-over-year growth 
-- **Funding Status**: Series B ($50M raised in 2023)
-- **Burn Rate**: Healthy 18-month runway
-- **Profitability**: Expected to reach profitability in Q4 2024
-
-### Market Position  
-- **Industry**: Growing AI/ML market segment
-- **Competition**: Strong competitive position
-- **Innovation**: Active R&D and patent portfolio
+- Revenue growth and funding figures shown here are illustrative placeholders.
 
 ### Risk Factors
-- **Market Dependency**: Some customer concentration risk
-- **Regulatory**: Potential AI regulation impacts
-- **Talent**: Competitive hiring market
+- This section would summarise real layoffs, news, and market signals in live mode.
 
-**Recommendation**: STABLE - Good growth trajectory with solid funding."""
+**Stability score: 7/10 (sample)**"""
 
-    # Salary analysis
-    elif "salary" in prompt_lower or "compensation" in prompt_lower:
-        return """## Compensation Analysis Report
+    if "salary" in prompt_lower or "compensation" in prompt_lower:
+        return """## Compensation Analysis (DEMO DATA)
 
-### Market Benchmarking
-- **Base Salary Range**: $140k - $180k
-- **Market Percentile**: 70th percentile for role/location
-- **Total Compensation**: $160k - $220k including equity
+> **Demo mode** — sample data, not a real benchmark. Configure an API key for live analysis.
 
-### Cost of Living Analysis
-- **Location**: San Francisco, CA
-- **Housing**: $3,500/month average rent
-- **Effective Salary**: ~$120k after COL adjustment
-- **Remote Option**: Significant value-add
+- **Base Salary Range:** $140k - $180k (illustrative)
+- **Total Compensation:** $160k - $220k including equity (illustrative)
+- **Cost-of-living adjustment:** placeholder figures only
 
-### Package Strengths
-- Competitive base salary
-- Equity upside potential  
-- Comprehensive benefits
-- Remote work flexibility
+**Overall rating:** sample output for demonstration."""
 
-### Negotiation Opportunities
-- Stock options vesting schedule
-- Signing bonus potential
-- Professional development budget
+    if "comprehensive" in prompt_lower or "recommendation" in prompt_lower:
+        return """# Job Opportunity Analysis Report (DEMO DATA)
 
-**Overall Rating**: EXCELLENT package for current market conditions."""
-
-    # Final report generation
-    elif "comprehensive analysis" in prompt_lower or "recommendation" in prompt_lower:
-        return """# Job Opportunity Analysis Report
+> **Demo mode** — this report uses sample data and does not reflect the posting you submitted.
+> Configure an LLM API key to generate a real, posting-specific analysis.
 
 ## Executive Summary
-This position at TechCorp Inc. presents a **HIGHLY RECOMMENDED** opportunity for an experienced AI Engineer.
+This is illustrative output showing the report structure end to end.
 
-## Key Highlights
-✅ **Company Stability**: Strong financial position with recent funding  
-✅ **Compensation**: Above-market package ($160k-$220k total comp)  
-✅ **Growth Potential**: Rapidly expanding AI team  
-✅ **Work-Life Balance**: Remote-friendly culture  
-✅ **Technology Stack**: Modern, cutting-edge tools  
+## Final Recommendation
+**Recommended (sample verdict).** In live mode this verdict is derived from the
+real job, company, and compensation analysis.
 
-## Detailed Assessment
+**Confidence Level: demo**"""
 
-### Role Fit Analysis
-- **Technical Match**: 95% - Excellent alignment with required skills
-- **Experience Level**: Perfect match for 5+ years requirement  
-- **Growth Opportunity**: High - Senior role with mentoring responsibilities
+    return (
+        "**Demo mode** — no LLM provider key is configured, so this is sample "
+        "output rather than a real analysis. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+        "or FEATHERLESS_API_KEY to enable live analysis."
+    )
 
-### Company Evaluation
-- **Financial Health**: Stable with strong growth trajectory
-- **Culture**: Positive reviews highlighting innovation and collaboration
-- **Market Position**: Well-positioned in growing AI market
 
-### Compensation Excellence
-- **Market Competitiveness**: 70th percentile 
-- **Total Package Value**: $180k-$220k estimated
-- **Negotiation Potential**: Good leverage for improvements
+# Backwards-compatibility alias for any callers/tests referencing the old name.
+generate_mock_response = generate_sample_response
 
-## Recommendations
 
-### Immediate Actions
-1. **Apply promptly** - High-quality opportunity likely to move fast
-2. **Prepare for technical interviews** focusing on ML system design
-3. **Research team structure** and recent company achievements
+def get_llm_client():
+    """Deprecated: kept for backwards compatibility.
 
-### Interview Strategy  
-- Emphasize production ML deployment experience
-- Highlight mentoring and leadership examples
-- Ask about AI ethics and responsible development practices
-
-### Negotiation Focus
-- Request equity details and vesting schedule
-- Inquire about professional development budget
-- Clarify remote work policy specifics
-
-## Risk Mitigation
-- **Single point of concern**: Rapid growth may mean changing priorities
-- **Mitigation**: Ask about role stability and team roadmap
-
-## Final Verdict
-**STRONG RECOMMEND** - This opportunity offers excellent career advancement, competitive compensation, and alignment with current AI market trends.
-
-**Confidence Level**: 9/10"""
-
-    # Default response
-    else:
-        return f"""**Demo Response** - This is a simulated response for the prompt type detected. 
-
-In the production version, this would connect to:
-- Real company financial APIs
-- Live salary databases  
-- Current market research
-- Actual company reviews
-
-*Detected model: {model}*
-*Prompt type: General analysis*
-
-For a real implementation, please add your API keys to the environment variables."""
+    The provider client is now created per-request inside ``get_completion`` so
+    that provider/model selection is resolved at call time. Returns None in
+    demo mode.
+    """
+    return None

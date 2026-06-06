@@ -3,25 +3,30 @@
 
 An AI-powered platform that helps job seekers analyze job postings, evaluate company stability, and make informed career decisions by combining multiple data sources and AI analysis.
 
-## 🚀 Current Status: Proof of Concept (Demo Version)
+## 🚀 Current Status: Phase 0 — real LLM, honest gaps
 
-This is a **working demo** that showcases the core functionality using simulated data and mock external tool responses. The platform demonstrates the complete workflow but uses placeholder data for external API calls.
+The pipeline now performs **real LLM calls** against whichever provider key is
+present (Anthropic / OpenAI / Featherless — auto-detected, overridable with
+`LLM_PROVIDER`). Without a key, the app runs in clearly-labelled demo mode and
+returns sample data — never silently. See `.env.example`.
 
-### What Works Now (Demo Features)
-- ✅ Job posting analysis and requirement extraction
-- ✅ Company stability assessment (simulated)
-- ✅ Salary analysis and cost of living comparison (simulated) 
-- ✅ Comprehensive final recommendation reports
-- ✅ Progress tracking and user feedback
-- ✅ Clean, responsive Streamlit interface
-- ✅ Caching system for performance
-- ✅ Multiple AI model support (Fast/Detailed analysis)
+### What Works Now
+- ✅ Real LLM calls (Anthropic / OpenAI / Featherless) with retries
+- ✅ Demo mode is visibly labelled (no fake "Production Mode" badge)
+- ✅ Job posting requirement extraction
+- ✅ Company stability briefing with explicit "data not available" labels
+- ✅ Heuristic salary + cost-of-living estimate, labelled as ESTIMATE
+- ✅ Final recommendation report
+- ✅ Streamlit UI, progress callbacks, thread-safe cache
+- ✅ End-to-end demo-mode smoke test
 
-### Current Limitations (Mock Data)
-- 🔄 Company research uses simulated financial data
-- 🔄 Salary data is estimated using basic formulas
-- 🔄 Cost of living analysis uses placeholder calculations
-- 🔄 Company reviews and culture insights are generated examples
+### Honest Gaps (Phase 1+)
+- 🔄 No live company news / layoffs feed yet — placeholder, not a clean bill of health
+- 🔄 Salary & COL figures come from internal heuristics, not Glassdoor/Numbeo
+- ❌ Employee-review fabrication has been REMOVED — culture section is now an
+  inference briefing with research pointers, not invented reviews
+- ❌ Resume / ATS analysis (headline feature from the vision doc) not built
+- ❌ No persistence, auth, or application tracking
 
 ## 🎯 Roadmap: Production-Ready Features
 

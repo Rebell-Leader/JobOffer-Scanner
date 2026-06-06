@@ -19,18 +19,25 @@ st.write("Analyze job postings with AI-powered insights")
 # Show demo mode status
 env_status = check_environment_setup()
 if env_status["demo_mode"]:
-    st.info("🔄 **Demo Mode**: Using simulated data for analysis. Add API keys to `.env` for real data integration.")
+    st.info(
+        "🔄 **Demo Mode**: No LLM provider key is configured, so results use "
+        "**sample data** and do not reflect the posting you submit. Set "
+        "`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `FEATHERLESS_API_KEY` "
+        "(see `.env.example`) to enable real analysis."
+    )
 else:
-    st.success("🚀 **Production Mode**: Using real API endpoints for analysis.")
+    st.success(
+        f"🚀 **Production Mode**: Live analysis via **{env_status['llm_provider']}**."
+    )
 
 # Main form
 with st.form("job_analysis_form"):
-    # Model selection
+    # Model selection (logical tier — resolved to a concrete model per provider)
     model_choice = st.radio(
-        "Select analysis model:",
-        ["Fast (Qwen2.5-72B)", "Detailed (DeepSeek-R1)"],
-        index=0,  # Default to the faster model
-        help="Choose between faster results or more detailed analysis"
+        "Select analysis depth:",
+        ["Fast", "Detailed"],
+        index=0,  # Default to the faster tier
+        help="Fast = quicker, cheaper model. Detailed = deeper reasoning model.",
     )
 
     # Basic job details
@@ -85,8 +92,6 @@ if analyze_submitted:
             tool_findings = st.container()
 
         with st.spinner("Analyzing job posting..."):
-            from agents.orchestrator import run_analysis
-
             # Prepare input
             job_data = {
                 "company_name": company_name,
@@ -95,14 +100,9 @@ if analyze_submitted:
                 "compensation": compensation
             }
 
-            # Set the model based on user selection
-            selected_model = "deepseek-ai/DeepSeek-R1-0528" if "Detailed" in model_choice else "Qwen/Qwen3-32B"
-
-            # Store the model selection in session state
-            if "selected_model" not in st.session_state:
-                st.session_state.selected_model = selected_model
-            else:
-                st.session_state.selected_model = selected_model
+            # Pass a logical tier; utils.llm resolves it to the active provider's model.
+            selected_model = "detailed" if "Detailed" in model_choice else "fast"
+            st.session_state.selected_model = selected_model
 
             # Update progress - Job analysis stage
             status_text.text("Analyzing job requirements...")
@@ -166,14 +166,21 @@ if analyze_submitted:
     else:
         st.warning("Please fill in all required fields marked with *")
 
-# Sidebar with info
+# Sidebar
 st.sidebar.title("About")
 st.sidebar.info(
-    "This AI-powered platform helps you analyze job postings, "
-    "evaluate company stability, and make informed career decisions. "
-    "We combine data from multiple sources including:\n"
-    "- Company news and financials\n"
-    "- Market salary data\n"
-    "- Cost of living analysis\n"
-    "- Industry layoff trends"
+    "AI-assisted analysis of job postings: requirements, company signals, "
+    "compensation and cost-of-living context, plus a final recommendation."
 )
+
+if env_status["demo_mode"]:
+    st.sidebar.warning(
+        "**Demo mode active** — every section below is sample output, not a "
+        "real assessment of your posting."
+    )
+else:
+    st.sidebar.caption(
+        f"LLM provider: `{env_status['llm_provider']}`. External data sources "
+        "(news, salary benchmarks, COL) are still being integrated — figures "
+        "from those sections are model estimates and labelled as such."
+    )
