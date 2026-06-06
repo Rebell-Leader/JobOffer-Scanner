@@ -44,4 +44,5 @@ integrations = ["streamlit_database:1.0.0"]
 [userenv]
 
 [userenv.shared]
-OPENAI_FAST_MODEL = "gpt-5.5-mini"
+OPENAI_FAST_MODEL = "gpt-5-nano"
+OPENAI_DETAILED_MODEL = "gpt-5-mini"

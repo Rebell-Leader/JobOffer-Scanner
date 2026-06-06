@@ -1581,7 +1581,7 @@ with applications_tab:
                                             if tone:
                                                 st.caption(f"tone: `{tone}`")
                                         st.markdown(art.content)
-                                with st.expander("📐 Show diff (A → B)"):
+                                if st.checkbox("📐 Show diff (A → B)", key=f"art_diff_expand_{rec.id}_{art_a.id}_{art_b.id}"):
                                     view_key = f"art_diff_view_{rec.id}_{art_a.id}_{art_b.id}"
                                     view = st.radio(
                                         "View",
@@ -1621,7 +1621,7 @@ with applications_tab:
                             f"{icon} {label} #{a.id} · "
                             f"{a.created_at.strftime('%Y-%m-%d %H:%M')} · {check_emoji}"
                         )
-                        with st.expander(header):
+                        if st.checkbox(header, key=f"art_expand_{a.id}"):
                             # Constraint-check badge — the whole point of the post-check.
                             if check.is_clean:
                                 st.success(summarize_check(check))
@@ -1633,36 +1633,33 @@ with applications_tab:
                                 # doesn't dominate the artifact view.
                                 suggestions = build_suggestions(check)
                                 if suggestions:
-                                    with st.expander(
-                                        f"💡 Suggested fixes ({len(suggestions)})",
-                                        expanded=True,
-                                    ):
-                                        for sidx, sug in enumerate(suggestions):
-                                            sug_col1, sug_col2 = st.columns([4, 1])
-                                            with sug_col1:
-                                                st.markdown(f"**{sug.title}**")
-                                                st.caption(sug.explanation)
-                                            with sug_col2:
-                                                if sug.auto_appliable:
-                                                    btn_key = f"sug_apply_{a.id}_{sidx}"
-                                                    if st.button("Add ✓", key=btn_key):
-                                                        try:
-                                                            apply_skill_addition(
-                                                                st.session_state.user_id,
-                                                                sug.term,
-                                                            )
-                                                            # Re-check now that
-                                                            # the source has it.
-                                                            recheck_artifact(
-                                                                st.session_state.user_id,
-                                                                a.id,
-                                                            )
-                                                            st.rerun()
-                                                        except (
-                                                            MasterCVError,
-                                                            TailoringError,
-                                                        ) as exc:
-                                                            st.error(str(exc))
+                                    st.markdown(f"**💡 Suggested fixes ({len(suggestions)})**")
+                                    for sidx, sug in enumerate(suggestions):
+                                        sug_col1, sug_col2 = st.columns([4, 1])
+                                        with sug_col1:
+                                            st.markdown(f"**{sug.title}**")
+                                            st.caption(sug.explanation)
+                                        with sug_col2:
+                                            if sug.auto_appliable:
+                                                btn_key = f"sug_apply_{a.id}_{sidx}"
+                                                if st.button("Add ✓", key=btn_key):
+                                                    try:
+                                                        apply_skill_addition(
+                                                            st.session_state.user_id,
+                                                            sug.term,
+                                                        )
+                                                        # Re-check now that
+                                                        # the source has it.
+                                                        recheck_artifact(
+                                                            st.session_state.user_id,
+                                                            a.id,
+                                                        )
+                                                        st.rerun()
+                                                    except (
+                                                        MasterCVError,
+                                                        TailoringError,
+                                                    ) as exc:
+                                                        st.error(str(exc))
                                 st.caption(
                                     "False positives are possible (the detector is "
                                     "case-folded substring matching, not semantic). "
@@ -1718,7 +1715,7 @@ with applications_tab:
                     list_shares_for_application,
                     revoke as revoke_share,
                 )
-                with st.expander("🔗 Share read-only link"):
+                if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):
                     base_url = os.getenv("APP_BASE_URL", "").rstrip("/")
                     existing_shares = list_shares_for_application(
                         st.session_state.user_id, rec.id,
@@ -1783,7 +1780,7 @@ with applications_tab:
 
                 report = rec.analysis_json.get("final_report")
                 if report:
-                    with st.expander("📑 Saved report"):
+                    if st.checkbox("📑 Saved report", key=f"report_expand_{rec.id}"):
                         st.markdown(report)
 
         if records and not visible:
@@ -2078,9 +2075,9 @@ with cv_tab:
                                 f"{rev.created_at.strftime('%Y-%m-%d %H:%M')}"
                                 f"{reason} — {len(rev.raw_text)} chars"
                             )
-                            with st.expander("Preview", expanded=False):
+                            if st.checkbox("Preview", key=f"rev_preview_{rev.id}"):
                                 st.text(rev.raw_text[:2000] + ("…" if len(rev.raw_text) > 2000 else ""))
-                            with st.expander("🔀 Diff against current", expanded=False):
+                            if st.checkbox("🔀 Diff against current", key=f"rev_diff_expand_{rev.id}"):
                                 view_key = f"rev_diff_view_{rev.id}"
                                 view = st.radio(
                                     "View",
