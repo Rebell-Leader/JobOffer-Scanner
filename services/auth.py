@@ -130,6 +130,35 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
         return AuthedUser(id=user.id, email=user.email)
 
 
+def create_oauth_user(email: str) -> AuthedUser:
+    """Create a user for an OAuth sign-up with an unusable random password.
+
+    OAuth users authenticate via the external provider, never via password —
+    but the column is NOT NULL, so we store the hash of a long random secret
+    the user never learns. They can later set a real password via the
+    password-reset flow if they want password login too.
+    """
+    email = _normalize_email(email)
+    if not _EMAIL_RE.match(email):
+        raise AuthError("OAuth provider returned an invalid email.")
+    with get_session() as session:
+        existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if existing is not None:
+            return AuthedUser(id=existing.id, email=existing.email)
+        user = User(email=email, password_hash=_hash_password(secrets.token_urlsafe(32)))
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return AuthedUser(id=user.id, email=user.email)
+
+
+def find_user_by_email(email: str) -> Optional[AuthedUser]:
+    email = _normalize_email(email)
+    with get_session() as session:
+        user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        return AuthedUser(id=user.id, email=user.email) if user else None
+
+
 def get_user(user_id: int) -> Optional[AuthedUser]:
     with get_session() as session:
         user = session.get(User, user_id)

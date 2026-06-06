@@ -216,8 +216,69 @@ _RESET_GENERIC_NOTICE = (
 )
 
 
+def _handle_oauth_callback() -> bool:
+    """If the URL carries an OAuth ?code=&state=, complete the login.
+
+    Returns True if it consumed a callback (caller should stop rendering the
+    rest of the auth gate). Verifies the CSRF state nonce against the value
+    we stashed when building the authorize URL.
+    """
+    import secrets as _secrets
+
+    from services.oauth import OAuthError, complete_login
+
+    code = st.query_params.get("code")
+    state = st.query_params.get("state")
+    if not code or not state:
+        return False
+    expected = st.session_state.get("oauth_state")
+    provider = st.session_state.get("oauth_provider")
+    if not expected or not provider or not _secrets.compare_digest(state, expected):
+        st.error("OAuth state mismatch — please try signing in again.")
+        st.query_params.clear()
+        return True
+    try:
+        user = complete_login(provider, code)
+        st.session_state.user_id = user.id
+        st.session_state.user_email = user.email
+    except OAuthError as exc:
+        st.error(str(exc))
+    finally:
+        st.session_state.pop("oauth_state", None)
+        st.session_state.pop("oauth_provider", None)
+        st.query_params.clear()
+    if st.session_state.get("user_id"):
+        st.rerun()
+    return True
+
+
+def _render_oauth_buttons() -> None:
+    import secrets as _secrets
+
+    from services.oauth import build_authorize_url, configured_providers
+
+    providers = configured_providers()
+    if not providers:
+        return
+    st.markdown("**Or continue with:**")
+    cols = st.columns(len(providers))
+    for col, provider in zip(cols, providers):
+        with col:
+            # Fresh CSRF nonce per render; stashed for callback verification.
+            state = _secrets.token_urlsafe(16)
+            st.session_state.oauth_state = state
+            st.session_state.oauth_provider = provider
+            url = build_authorize_url(provider, state)
+            label = {"google": "Google", "github": "GitHub"}.get(provider, provider)
+            st.link_button(f"Sign in with {label}", url, use_container_width=True)
+    st.divider()
+
+
 def render_auth() -> None:
+    if _handle_oauth_callback():
+        return
     st.write("Sign in or create an account to save your analyses and track applications.")
+    _render_oauth_buttons()
     login_tab, register_tab, recover_tab = st.tabs(
         ["Sign in", "Create account", "Recover password"]
     )

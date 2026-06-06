@@ -65,6 +65,10 @@ class User(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    oauth_identities: Mapped[list["OAuthIdentity"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     master_cv: Mapped[Optional["MasterCV"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -113,6 +117,33 @@ class UserTwoFactor(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="two_factor")
+
+
+class OAuthIdentity(Base):
+    """Links an external OAuth identity (Google / GitHub) to a local user.
+
+    One user can have multiple identities (sign in with Google AND GitHub
+    that both resolve to the same account by email). The (provider,
+    provider_user_id) pair is globally unique — an external identity maps to
+    exactly one local account.
+    """
+
+    __tablename__ = "oauth_identities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="oauth_identities")
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_user_id", name="uq_oauth_provider_subject"),
+    )
 
 
 class PasswordResetToken(Base):
@@ -507,6 +538,9 @@ AUDIT_KINDS = (
     "api_token.used",
     "webhook.create",
     "webhook.delete",
+    "user.oauth.login",
+    "user.oauth.register",
+    "user.oauth.link",
 )
 
 
