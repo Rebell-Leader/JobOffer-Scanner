@@ -210,6 +210,39 @@ class MasterCV(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="master_cv")
+    revisions: Mapped[list["MasterCVRevision"]] = relationship(
+        back_populates="master_cv",
+        cascade="all, delete-orphan",
+        order_by="desc(MasterCVRevision.created_at)",
+    )
+
+
+class MasterCVRevision(Base):
+    """A snapshot of a previous master-CV version.
+
+    We snapshot before every overwrite so the user can compare and revert. Kept
+    deliberately simple — full raw_text + structured + reason, not a diff —
+    because tens-of-kilobytes-per-row is fine at the scale of a personal CV.
+    """
+
+    __tablename__ = "master_cv_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    master_cv_id: Mapped[int] = mapped_column(
+        ForeignKey("master_cvs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Denormalized for fast ownership checks across all revisions.
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    structured: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Short tag describing the change that triggered the snapshot — "manual
+    # edit", "parsed", "skill added", "restored", etc.
+    reason: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    master_cv: Mapped["MasterCV"] = relationship(back_populates="revisions")
 
 
 class Project(Base):

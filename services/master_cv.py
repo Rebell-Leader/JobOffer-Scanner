@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
-from db.models import MasterCV
+from db.models import MasterCV, MasterCVRevision
 from db.session import get_session
 from tools.resume_tools import extract_resume_text  # PDF/DOCX/TXT parser
 from utils.llm import get_completion
@@ -36,6 +36,16 @@ class MasterCVRecord:
     updated_at: datetime
 
 
+@dataclass
+class RevisionRecord:
+    id: int
+    user_id: int
+    raw_text: str
+    structured: Optional[dict]
+    reason: Optional[str]
+    created_at: datetime
+
+
 def _to_record(cv: MasterCV) -> MasterCVRecord:
     return MasterCVRecord(
         user_id=cv.user_id,
@@ -43,6 +53,17 @@ def _to_record(cv: MasterCV) -> MasterCVRecord:
         structured=cv.structured,
         created_at=cv.created_at,
         updated_at=cv.updated_at,
+    )
+
+
+def _to_revision(rev: MasterCVRevision) -> RevisionRecord:
+    return RevisionRecord(
+        id=rev.id,
+        user_id=rev.user_id,
+        raw_text=rev.raw_text,
+        structured=rev.structured,
+        reason=rev.reason,
+        created_at=rev.created_at,
     )
 
 
@@ -62,12 +83,19 @@ def save_master_cv(
     user_id: int,
     raw_text: str,
     structured: Optional[dict] = None,
+    reason: Optional[str] = None,
 ) -> MasterCVRecord:
     """Create-or-update the user's master CV.
 
     Setting ``structured`` to None leaves the existing structured projection
     alone (so a text edit doesn't wipe a previous parse); pass an explicit
     empty dict to clear it.
+
+    On UPDATE, the previous version is snapshotted as a ``MasterCVRevision``
+    *only if the content actually changed* — purely-metadata calls (e.g. a
+    re-parse that returns the same structured payload) don't pollute history.
+    ``reason`` is a short tag stored on the snapshot (``manual edit``,
+    ``parsed``, ``skill added``, ``restored from #N``, etc.).
     """
     raw_text = (raw_text or "").strip()
     if not raw_text:
@@ -85,12 +113,79 @@ def save_master_cv(
             )
             session.add(cv)
         else:
+            content_changed = (
+                raw_text != cv.raw_text
+                or (structured is not None and structured != cv.structured)
+            )
+            if content_changed:
+                # Snapshot the prior version BEFORE mutating.
+                session.add(
+                    MasterCVRevision(
+                        master_cv_id=cv.id,
+                        user_id=user_id,
+                        raw_text=cv.raw_text,
+                        structured=cv.structured,
+                        reason=reason or "manual edit",
+                    )
+                )
             cv.raw_text = raw_text
             if structured is not None:
                 cv.structured = structured
         session.commit()
         session.refresh(cv)
         return _to_record(cv)
+
+
+def list_revisions(user_id: int) -> List[RevisionRecord]:
+    """All saved revisions for the user, newest first."""
+    with get_session() as session:
+        rows = session.execute(
+            select(MasterCVRevision)
+            .where(MasterCVRevision.user_id == user_id)
+            .order_by(desc(MasterCVRevision.created_at))
+        ).scalars().all()
+        return [_to_revision(r) for r in rows]
+
+
+def restore_revision(user_id: int, revision_id: int) -> MasterCVRecord:
+    """Promote a saved revision to the active master CV.
+
+    Saves the *current* version as a new snapshot first (so restore is itself
+    reversible), then writes the revision's content as the current master CV.
+    """
+    with get_session() as session:
+        rev = session.get(MasterCVRevision, revision_id)
+        if rev is None or rev.user_id != user_id:
+            raise MasterCVError("Revision not found.")
+        cv = session.execute(
+            select(MasterCV).where(MasterCV.user_id == user_id)
+        ).scalar_one_or_none()
+        if cv is None:
+            raise MasterCVError("No active master CV to restore over.")
+        # Snapshot the current as "before-restore" so the user can undo.
+        session.add(
+            MasterCVRevision(
+                master_cv_id=cv.id,
+                user_id=user_id,
+                raw_text=cv.raw_text,
+                structured=cv.structured,
+                reason=f"before restore of #{revision_id}",
+            )
+        )
+        cv.raw_text = rev.raw_text
+        cv.structured = rev.structured
+        session.commit()
+        session.refresh(cv)
+        return _to_record(cv)
+
+
+def delete_revision(user_id: int, revision_id: int) -> None:
+    with get_session() as session:
+        rev = session.get(MasterCVRevision, revision_id)
+        if rev is None or rev.user_id != user_id:
+            raise MasterCVError("Revision not found.")
+        session.delete(rev)
+        session.commit()
 
 
 def save_master_cv_from_upload(
@@ -168,5 +263,5 @@ def parse_master_cv(user_id: int, model: str = "detailed") -> dict:
     except json.JSONDecodeError as exc:
         raise MasterCVError(f"Could not parse model response as JSON: {exc}") from exc
 
-    save_master_cv(user_id, cv.raw_text, structured=structured)
+    save_master_cv(user_id, cv.raw_text, structured=structured, reason="parsed")
     return structured

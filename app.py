@@ -18,8 +18,11 @@ from services.applications import (
 from services.master_cv import (
     MasterCVError,
     delete_master_cv,
+    delete_revision,
     get_master_cv,
+    list_revisions,
     parse_master_cv,
+    restore_revision,
     save_master_cv,
     save_master_cv_from_upload,
 )
@@ -38,6 +41,10 @@ from services.stages import (
     list_stages,
 )
 from services.constraint_check import ConstraintCheck, summarize as summarize_check
+from services.suggestions import (
+    apply_skill_addition,
+    build_suggestions,
+)
 from services.tailoring import (
     COVER_LETTER_TONES,
     TailoringError,
@@ -750,30 +757,42 @@ with applications_tab:
                                 st.success(summarize_check(check))
                             else:
                                 st.warning(summarize_check(check))
-                                bits = []
-                                if check.new_proper_nouns:
-                                    bits.append(
-                                        ("**New skill/term tokens not in your master CV / projects:** "
-                                         + ", ".join(f"`{t}`" for t in check.new_proper_nouns))
-                                    )
-                                if check.new_years:
-                                    bits.append(
-                                        "**New years:** " + ", ".join(f"`{y}`" for y in check.new_years)
-                                    )
-                                if check.new_percentages:
-                                    bits.append(
-                                        "**New percentages:** " + ", ".join(
-                                            f"`{p}`" for p in check.new_percentages
-                                        )
-                                    )
-                                if check.new_quantitative_claims:
-                                    bits.append(
-                                        "**New quantitative claims:** " + ", ".join(
-                                            f"`{q}`" for q in check.new_quantitative_claims
-                                        )
-                                    )
-                                for bit in bits:
-                                    st.markdown(bit)
+                                # Soft suggestions — one-click "Add to master
+                                # CV" for skill flags, manual-edit hint for
+                                # the rest. Wrapped in a sub-expander so it
+                                # doesn't dominate the artifact view.
+                                suggestions = build_suggestions(check)
+                                if suggestions:
+                                    with st.expander(
+                                        f"💡 Suggested fixes ({len(suggestions)})",
+                                        expanded=True,
+                                    ):
+                                        for sidx, sug in enumerate(suggestions):
+                                            sug_col1, sug_col2 = st.columns([4, 1])
+                                            with sug_col1:
+                                                st.markdown(f"**{sug.title}**")
+                                                st.caption(sug.explanation)
+                                            with sug_col2:
+                                                if sug.auto_appliable:
+                                                    btn_key = f"sug_apply_{a.id}_{sidx}"
+                                                    if st.button("Add ✓", key=btn_key):
+                                                        try:
+                                                            apply_skill_addition(
+                                                                st.session_state.user_id,
+                                                                sug.term,
+                                                            )
+                                                            # Re-check now that
+                                                            # the source has it.
+                                                            recheck_artifact(
+                                                                st.session_state.user_id,
+                                                                a.id,
+                                                            )
+                                                            st.rerun()
+                                                        except (
+                                                            MasterCVError,
+                                                            TailoringError,
+                                                        ) as exc:
+                                                            st.error(str(exc))
                                 st.caption(
                                     "False positives are possible (the detector is "
                                     "case-folded substring matching, not semantic). "
@@ -1020,6 +1039,55 @@ with cv_tab:
             if current_cv.structured:
                 with st.expander("View saved structured projection"):
                     st.json(current_cv.structured)
+
+            # ----- Revisions -----
+            revisions = list_revisions(st.session_state.user_id)
+            if revisions:
+                with st.expander(f"🕘 Revision history ({len(revisions)})"):
+                    st.caption(
+                        "Every content change snapshots the previous version. "
+                        "Restoring rewrites the current master CV from the chosen "
+                        "revision and itself creates a snapshot you can undo to."
+                    )
+                    for rev in revisions:
+                        rcol1, rcol2 = st.columns([5, 1])
+                        with rcol1:
+                            reason = f" · _{rev.reason}_" if rev.reason else ""
+                            st.markdown(
+                                f"**#{rev.id}** — "
+                                f"{rev.created_at.strftime('%Y-%m-%d %H:%M')}"
+                                f"{reason} — {len(rev.raw_text)} chars"
+                            )
+                            with st.expander("Preview", expanded=False):
+                                st.text(rev.raw_text[:2000] + ("…" if len(rev.raw_text) > 2000 else ""))
+                        with rcol2:
+                            armed_key = f"rev_restore_armed_{rev.id}"
+                            if st.session_state.get(armed_key):
+                                if st.button("Confirm", key=f"rev_yes_{rev.id}",
+                                             type="primary"):
+                                    try:
+                                        restore_revision(
+                                            st.session_state.user_id, rev.id
+                                        )
+                                        st.session_state.pop(armed_key, None)
+                                        st.rerun()
+                                    except MasterCVError as exc:
+                                        st.error(str(exc))
+                                if st.button("Cancel", key=f"rev_no_{rev.id}"):
+                                    st.session_state.pop(armed_key, None)
+                                    st.rerun()
+                            else:
+                                if st.button("↩ Restore", key=f"rev_{rev.id}"):
+                                    st.session_state[armed_key] = True
+                                    st.rerun()
+                            if st.button("🗑️", key=f"rev_del_{rev.id}"):
+                                try:
+                                    delete_revision(
+                                        st.session_state.user_id, rev.id
+                                    )
+                                    st.rerun()
+                                except MasterCVError as exc:
+                                    st.error(str(exc))
         else:
             st.info(
                 "_No master CV saved yet — upload or paste above to enable "
