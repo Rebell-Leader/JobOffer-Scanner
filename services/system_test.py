@@ -242,8 +242,14 @@ MOCK_ANALYSIS: dict = {
         "3. Prepare a system-design example (high-throughput Python service)"
     ),
     "verdict": {
-        "decision": "Apply",
+        # Canonical verdict shape used everywhere else in the app
+        # (utils/verdict.py + render_result): verdict / light / reasons /
+        # confidence. Keeping the mock on the same schema means the System
+        # Test tab renders the verdict badge identically to a real analysis.
+        "verdict": "Recommended",
+        "light": "green",
         "confidence": 8,
+        "source": "structured",
         "reasons": [
             "Compensation at / above market",
             "Well-funded (Series B, 18-month runway)",
