@@ -21,6 +21,12 @@ from services.analysis_runner import (
     enqueue_analysis,
     get_async_result,
 )
+from services.telegram_link import (
+    TelegramLinkError,
+    complete_binding,
+    get_user_id_by_chat,
+    unlink,
+)
 from tools.url_ingest import fetch_job_posting, is_url
 
 logger = logging.getLogger(__name__)
@@ -114,6 +120,9 @@ HELP_TEXT = (
     "*Usage:*\n"
     "`/analyze <url>` — fetch a posting URL and analyze it\n"
     "`/analyze\\n<paste posting text here>` — analyze pasted text\n"
+    "`/bind <token>` — link this chat to your web account (get the token from the web UI)\n"
+    "`/me` — show which account is linked to this chat\n"
+    "`/unbind` — disconnect this chat from your account\n"
     "`/help` — show this message\n\n"
     "Note: JS-heavy job boards (LinkedIn / Indeed / Glassdoor) often won't fetch — paste the text instead."
 )
@@ -128,6 +137,41 @@ async def handle_start(reply: Reply, _args: str = "") -> None:
 
 async def handle_help(reply: Reply, _args: str = "") -> None:
     await reply(HELP_TEXT)
+
+
+async def handle_bind(reply: Reply, args: str, chat_id: int, chat_username: Optional[str] = None) -> None:
+    token = (args or "").strip().split()[0] if (args or "").strip() else ""
+    if not token:
+        await reply(
+            "Usage: `/bind <token>`. Get a token from the web UI's Telegram-link panel."
+        )
+        return
+    try:
+        await asyncio.to_thread(complete_binding, chat_id, token, chat_username)
+    except TelegramLinkError as exc:
+        await reply(f"❌ {exc}")
+        return
+    await reply(
+        "✅ Linked. You'll get a Telegram notification when a new stage is "
+        "added to any of your saved applications. Send `/unbind` to disconnect."
+    )
+
+
+async def handle_unbind(reply: Reply, args: str, chat_id: int) -> None:
+    user_id = await asyncio.to_thread(get_user_id_by_chat, chat_id)
+    if user_id is None:
+        await reply("This chat isn't linked to any account.")
+        return
+    removed = await asyncio.to_thread(unlink, user_id)
+    await reply("Disconnected." if removed else "Nothing to disconnect.")
+
+
+async def handle_me(reply: Reply, args: str, chat_id: int) -> None:
+    user_id = await asyncio.to_thread(get_user_id_by_chat, chat_id)
+    if user_id is None:
+        await reply("This chat isn't linked to any account. Send `/bind <token>` to connect.")
+        return
+    await reply(f"Linked to web account *#{user_id}*.")
 
 
 async def handle_analyze(reply: Reply, args: str) -> None:

@@ -13,6 +13,8 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
+    BigInteger as sa_BigInt,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -66,6 +68,11 @@ class User(Base):
     projects: Mapped[list["Project"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
+    )
+    telegram_link: Mapped[Optional["TelegramLink"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
 
 
@@ -296,3 +303,49 @@ class ApplicationArtifact(Base):
     __table_args__ = (
         Index("ix_artifacts_app_kind_created", "application_id", "kind", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Telegram link — pairs a web user to a Telegram chat for notifications
+# ---------------------------------------------------------------------------
+
+class TelegramLinkBindingToken(Base):
+    """Short-lived token a user pastes into the bot to bind their chat.
+
+    Like password-reset tokens: stored as a bcrypt hash so a DB leak can't be
+    turned into account takeovers. One open token per user; superseded by
+    re-issuance.
+    """
+
+    __tablename__ = "telegram_link_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TelegramLink(Base):
+    """An active web-user ↔ Telegram-chat binding.
+
+    One row per user; we don't support multiple chats per account because the
+    UX of "which chat got the notification?" doesn't justify the complexity.
+    """
+
+    __tablename__ = "telegram_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    # Telegram chat_id is a 64-bit signed integer — fits in BigInteger.
+    chat_id: Mapped[int] = mapped_column(sa_BigInt, nullable=False, index=True)
+    chat_username: Mapped[Optional[str]] = mapped_column(String(64))
+    notify_on_stage: Mapped[bool] = mapped_column(default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="telegram_link")

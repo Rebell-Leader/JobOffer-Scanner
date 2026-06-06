@@ -73,8 +73,18 @@ from services.auth import (
     register_user,
     request_password_reset,
 )
-from services.notifications import send_password_reset_email
+from services.notifications import (
+    notify_stage_added,
+    send_password_reset_email,
+)
 from services.rate_limit import RateLimitExceeded
+from services.telegram_link import (
+    TelegramLinkError,
+    get_link,
+    issue_binding_token,
+    set_notify_on_stage,
+    unlink,
+)
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
@@ -209,6 +219,37 @@ with st.sidebar.expander("🔒 Change password"):
                 st.success("Password updated.")
             except AuthError as exc:
                 st.error(str(exc))
+
+with st.sidebar.expander("📲 Link Telegram"):
+    link = get_link(st.session_state.user_id)
+    if link is None:
+        st.caption(
+            "Generate a binding token, then send `/bind <token>` to the bot. "
+            "Once linked, you'll get a Telegram ping when any of your saved "
+            "applications gets a new pipeline stage."
+        )
+        if st.button("Generate binding token"):
+            tok = issue_binding_token(st.session_state.user_id)
+            st.code(f"/bind {tok}", language=None)
+            st.caption("Valid for 15 minutes. Paste into the bot.")
+    else:
+        username = f"@{link.chat_username}" if link.chat_username else f"chat {link.chat_id}"
+        st.success(f"Linked to {username}.")
+        notify_key = f"notify_on_stage_pref_{st.session_state.user_id}"
+        new_pref = st.toggle(
+            "Notify on new stage events",
+            value=link.notify_on_stage,
+            key=notify_key,
+        )
+        if new_pref != link.notify_on_stage:
+            try:
+                set_notify_on_stage(st.session_state.user_id, new_pref)
+                st.rerun()
+            except TelegramLinkError as exc:
+                st.error(str(exc))
+        if st.button("Disconnect"):
+            unlink(st.session_state.user_id)
+            st.rerun()
 
 if os.getenv("TELEGRAM_BOT_USERNAME"):
     bot_url = f"https://t.me/{os.getenv('TELEGRAM_BOT_USERNAME').lstrip('@')}"
@@ -743,10 +784,16 @@ with applications_tab:
 
                 # Quick-action buttons (one-click stage adds with today's date).
                 qa_cols = st.columns(3)
-                for idx, (label, kind) in enumerate(QUICK_ACTIONS):
-                    if qa_cols[idx % 3].button(label, key=f"qa_{rec.id}_{kind}"):
+                for idx, (qa_label, kind) in enumerate(QUICK_ACTIONS):
+                    if qa_cols[idx % 3].button(qa_label, key=f"qa_{rec.id}_{kind}"):
                         try:
-                            add_stage(st.session_state.user_id, rec.id, kind=kind)
+                            new_stage = add_stage(
+                                st.session_state.user_id, rec.id, kind=kind,
+                            )
+                            # Best-effort Telegram notification — never raises.
+                            notify_stage_added(
+                                st.session_state.user_id, rec, new_stage,
+                            )
                             st.rerun()
                         except StageError as exc:
                             st.error(str(exc))
@@ -774,7 +821,7 @@ with applications_tab:
                         )
                         if st.form_submit_button("Add stage", type="primary"):
                             try:
-                                add_stage(
+                                new_stage = add_stage(
                                     st.session_state.user_id,
                                     rec.id,
                                     kind=stage_kind,
@@ -783,6 +830,9 @@ with applications_tab:
                                     at_pipeline_stage=(
                                         None if at_pipeline == "(none)" else at_pipeline
                                     ),
+                                )
+                                notify_stage_added(
+                                    st.session_state.user_id, rec, new_stage,
                                 )
                                 st.success("Stage added.")
                                 st.rerun()

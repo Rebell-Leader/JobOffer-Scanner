@@ -78,9 +78,22 @@ def get_session() -> Session:
 
 
 def reset_engine_for_testing(url: str) -> None:
-    """Test helper: swap to an in-memory SQLite (or any URL) and reinit."""
+    """Test helper: swap to an in-memory SQLite (or any URL) and reinit.
+
+    Uses ``StaticPool`` so every SQLAlchemy connection in the test process
+    reuses the same underlying SQLite connection. Without this, code paths
+    that hop threads (``asyncio.to_thread``, Streamlit reruns, etc.) get a
+    fresh ``:memory:`` database with no tables.
+    """
+    from sqlalchemy.pool import StaticPool
+
     global _engine, _SessionLocal, _initialized
-    _engine = create_engine(url, connect_args={"check_same_thread": False}, future=True)
+    _engine = create_engine(
+        url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     _initialized = False
     init_db()

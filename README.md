@@ -96,6 +96,38 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 14–15 (shipped) — diff views, PDF for master CV, Telegram linking + notifications
+- ✅ **Phase 14** — `utils/diff.py` produces unified diffs that
+  ``st.code(language="diff")`` syntax-highlights. The master CV revision
+  history grew a `🔀 Diff against current` expander per entry. Per-application
+  artifact list grew a `🆚 Compare two artifacts` toggle for side-by-side
+  view with optional unified diff. Master CV also exports as PDF (reuses
+  Phase 12's `markdown_to_pdf`).
+- ✅ **Phase 15** — Telegram account linking + auto-notify:
+  - `TelegramLink` + `TelegramLinkBindingToken` tables, migration
+    `3ba1c52f7b93`. Binding tokens are bcrypt-hashed and 15-min one-shot
+    (same security pattern as password reset). Single linked chat per user.
+  - Bot grew `/bind <token>`, `/unbind`, `/me` commands. All run via
+    `asyncio.to_thread` so DB work doesn't block the event loop.
+  - When a stage event is added through the web UI, ``notify_stage_added``
+    sends a glanceable Telegram message (emoji + label + title + company +
+    date + truncated notes) to the linked chat, **best-effort** — never
+    raises into the UI, silently no-ops if unlinked / token unset.
+  - Outbound send hits the public Telegram HTTP API directly, so the web
+    container doesn't need to share state with the running bot process.
+  - Sidebar "📲 Link Telegram" panel issues tokens, shows the linked chat,
+    and toggles per-user notification preference.
+  - Caught a real test-infrastructure bug: tests that hop threads (the bot
+    handlers via `asyncio.to_thread`) saw an empty `:memory:` SQLite
+    database because each new connection gets a fresh one. Fixed by using
+    `StaticPool` in `reset_engine_for_testing` so all threads share one
+    connection. Every multi-threaded test now actually exercises the schema.
+- ✅ 38 new unit tests (10 in Phase 14, 28 in Phase 15: binding token
+  one-shot/expiry/rebind, hash-not-raw, chat lookup, unlink idempotency,
+  notify preference, send_to_chat conditional/HTTP-error paths,
+  notify_stage_added all branches incl. truncation, all 5 bot handlers,
+  migration). Full suite **247/247 green**.
+
 ### Phase 11–13 (shipped) — closing the loop + onboarding speed-ups
 - ✅ **Phase 11** — soft suggestions on flagged tailored artifacts
   (`services/suggestions.py`): each skill flag offers a one-click "Add to my
