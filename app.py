@@ -698,8 +698,8 @@ if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.pop(key, None)
     st.rerun()
 
-analyze_tab, applications_tab, analytics_tab, cv_tab = st.tabs(
-    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics", "📝 CV & Projects"]
+analyze_tab, applications_tab, analytics_tab, cv_tab, test_tab = st.tabs(
+    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics", "📝 CV & Projects", "🧪 System test"]
 )
 
 
@@ -919,14 +919,26 @@ with analyze_tab:
 
     if analyze_submitted:
         posting_text = job_description or ""
-        if job_url and is_url(job_url):
-            with st.spinner(f"Fetching {job_url} ..."):
+        raw_url_input = (job_url or "").strip()
+
+        if raw_url_input and is_url(raw_url_input):
+            with st.spinner(f"Fetching {raw_url_input} ..."):
                 try:
-                    posting_text = fetch_job_posting(job_url)
+                    posting_text = fetch_job_posting(raw_url_input)
                     st.success(f"Fetched {len(posting_text)} characters from URL.")
                 except ValueError as exc:
                     st.error(str(exc))
-                    posting_text = job_description or ""
+                    if not posting_text:
+                        st.info(
+                            "💡 The URL couldn't be parsed (JS-rendered or access-denied). "
+                            "Copy the job text and paste it in the **📝 Paste text** tab."
+                        )
+        elif raw_url_input and not is_url(raw_url_input) and len(raw_url_input) > 80:
+            # User pasted job description text into the URL field — route correctly.
+            st.info(
+                "ℹ️ Detected job-description text in the URL field — using it as the posting."
+            )
+            posting_text = raw_url_input
 
         resume_text = ""
         if resume_file is not None:
@@ -2309,3 +2321,116 @@ with cv_tab:
                     if st.button("🗑️ Delete project", key=f"dp_{p.id}"):
                         st.session_state[armed_key] = True
                         st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# System test tab
+# ---------------------------------------------------------------------------
+
+with test_tab:
+    st.header("🧪 System health check")
+    st.caption(
+        "Runs a lightweight probe of every configured integration. "
+        "LLM probes make one tiny real API call (~10 tokens) so actual "
+        "connectivity is verified. Everything else is connection-level only — "
+        "no writes, no side-effects."
+    )
+
+    run_test_btn = st.button("▶ Run system test", type="primary", key="run_system_test_btn")
+
+    if run_test_btn:
+        st.session_state["system_test_results"] = None  # clear stale results
+
+    if run_test_btn or st.session_state.get("system_test_results") is not None:
+        if run_test_btn:
+            from services.system_test import run_system_test
+            with st.spinner("Running probes…"):
+                results = run_system_test()
+            st.session_state["system_test_results"] = results
+        else:
+            results = st.session_state["system_test_results"]
+
+        # ── results table ────────────────────────────────────────────────────
+        st.subheader("Test results")
+        all_ok = all(r.ok or r.skipped for r in results)
+        if all_ok:
+            st.success("All configured integrations passed ✅")
+        else:
+            failures = [r.name for r in results if not r.ok and not r.skipped]
+            st.error(f"Issues detected with: {', '.join(failures)}")
+
+        for r in results:
+            cols = st.columns([0.05, 0.35, 0.45, 0.15])
+            cols[0].markdown(r.icon)
+            cols[1].markdown(f"**{r.name}**")
+            cols[2].markdown(r.message)
+            cols[3].markdown(r.duration_str if not r.skipped else "_skipped_")
+
+        st.divider()
+
+        # ── mock demo analysis display ───────────────────────────────────────
+        st.subheader("📋 Demo analysis")
+        st.caption(
+            "Pre-baked sample — shows every UI section without spending LLM tokens. "
+            "This is what a real analysis looks like."
+        )
+
+        from services.system_test import MOCK_ANALYSIS
+        mock = MOCK_ANALYSIS
+        details = mock["job_details"]["extracted_details"]
+        req = mock["job_details"]["requirements_analysis"]
+        verdict = mock["verdict"]
+
+        # Verdict banner
+        confidence = verdict.get("confidence", 0)
+        decision = verdict.get("decision", "")
+        verdict_color = {"Apply": "green", "Consider": "orange", "Avoid": "red"}.get(decision, "blue")
+        st.markdown(
+            f"**Verdict:** :{verdict_color}[{decision}] &nbsp;·&nbsp; "
+            f"Confidence **{confidence}/10**"
+        )
+
+        reason_cols = st.columns(2)
+        with reason_cols[0]:
+            st.markdown("**Why apply**")
+            for r in verdict.get("reasons", []):
+                st.markdown(f"- {r}")
+        with reason_cols[1]:
+            st.markdown("**Watch-outs**")
+            for c in verdict.get("cautions", []):
+                st.markdown(f"- {c}")
+
+        st.divider()
+
+        # Job details
+        d1, d2 = st.columns(2)
+        with d1:
+            st.markdown("**Position**")
+            st.markdown(f"🏢 {details.get('company_name', '')}")
+            st.markdown(f"💼 {details.get('job_title', '')}")
+            st.markdown(f"📍 {details.get('location', '')}")
+            st.markdown(f"💰 {details.get('compensation', '')}")
+        with d2:
+            st.markdown("**Required skills**")
+            for skill in req.get("technical_skills", []):
+                st.markdown(f"- {skill}")
+
+        st.divider()
+
+        # Analysis sections (company / salary / report)
+        for section_key, section_label in [
+            ("company_analysis", "Company analysis"),
+            ("salary_analysis", "Compensation analysis"),
+        ]:
+            section = mock.get(section_key, {})
+            if section:
+                st.markdown(f"**{section_label}**")
+                for _k, v in section.items():
+                    st.markdown(v)
+                st.divider()
+
+        st.markdown("**Full report**")
+        st.markdown(mock.get("final_report", ""))
+
+    else:
+        st.info("Click **▶ Run system test** above to probe all configured integrations.")

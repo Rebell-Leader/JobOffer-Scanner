@@ -357,6 +357,28 @@ real job, company, and compensation analysis.
 generate_mock_response = generate_sample_response
 
 
+def ping_provider(provider: str) -> tuple[bool, str]:
+    """Make a minimal real API call to verify a provider is reachable.
+
+    Uses the provider's fast-tier model and a 10-token prompt so the cost is
+    negligible. Returns ``(ok, human-readable message)``.
+    """
+    key_env = _PROVIDER_KEYS.get(provider, "")
+    if not os.getenv(key_env):
+        return False, "Not configured (no API key)"
+
+    model = TIER_MODELS[provider]["fast"]
+    prompt = "Reply with exactly one word: OK"
+    try:
+        if provider == "anthropic":
+            text = _complete_anthropic(prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
+        else:
+            text = _complete_openai_compatible(provider, prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
+        return True, repr(text.strip()[:40])
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
 def get_llm_client():
     """Deprecated: kept for backwards compatibility.
 
