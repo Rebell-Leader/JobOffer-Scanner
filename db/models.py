@@ -175,6 +175,10 @@ class Application(Base):
         cascade="all, delete-orphan",
         order_by="ApplicationStage.occurred_on, ApplicationStage.id",
     )
+    shares: Mapped[list["ApplicationShare"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         # Quick "my applications, newest first" filter.
@@ -349,6 +353,37 @@ class ApplicationArtifact(Base):
     )
 
 
+class ApplicationShare(Base):
+    """A read-only sharing token for one ``Application``.
+
+    Tokens are opaque random strings (URL-safe) and unique. Optional
+    ``expires_at`` lets the owner cap how long the link works; ``revoked_at``
+    is set when the owner revokes manually. View counters help the owner
+    notice unexpected access. ``include_artifacts`` controls whether the
+    public view also exposes tailored CVs / cover letters.
+    """
+
+    __tablename__ = "application_shares"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    include_artifacts: Mapped[bool] = mapped_column(default=False, nullable=False)
+    view_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    application: Mapped["Application"] = relationship(back_populates="shares")
+
+
 # ---------------------------------------------------------------------------
 # Audit log — security-sensitive events worth a paper trail
 # ---------------------------------------------------------------------------
@@ -371,6 +406,9 @@ AUDIT_KINDS = (
     "telegram.bind",
     "telegram.unbind",
     "artifact.delete",
+    "share.create",
+    "share.revoke",
+    "share.view",
 )
 
 

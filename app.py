@@ -135,6 +135,54 @@ configure_logging()
 print_environment_status()
 init_db()
 
+
+# ---------------------------------------------------------------------------
+# Public share view — branches BEFORE the auth gate so a recipient with a
+# valid token can read without an account.
+# ---------------------------------------------------------------------------
+
+share_token = st.query_params.get("share")
+if share_token:
+    from services.sharing import ShareError, get_view
+
+    st.title("📄 Shared job analysis")
+    try:
+        view = get_view(share_token)
+    except ShareError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    light = view.verdict_light or "yellow"
+    light_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(light, "⚪")
+    st.markdown(
+        f"### {light_emoji} {view.job_title} @ {view.company_name}"
+        + (f" — {view.location}" if view.location else "")
+    )
+    if view.verdict:
+        st.caption(f"Verdict: **{view.verdict}** · status: _{view.status}_")
+    if view.ats_score is not None:
+        st.metric("ATS keyword match", f"{view.ats_score}/100")
+
+    report = view.analysis_json.get("final_report")
+    if report:
+        st.markdown("---")
+        st.markdown(report)
+    else:
+        st.info("This analysis has no report yet.")
+
+    if view.artifacts:
+        st.markdown("---")
+        st.subheader("🎯 Tailored artifacts")
+        for art in view.artifacts:
+            label = "Tailored CV" if art["kind"] == "tailored_cv" else "Cover letter"
+            with st.expander(f"{label} (created {art['created_at'][:10]})"):
+                st.markdown(art["content"])
+
+    st.caption(
+        "This is a read-only shared view. Sign up to run your own analyses."
+    )
+    st.stop()
+
 st.title("AI Job Analysis Platform")
 
 env_status = check_environment_setup()
@@ -1453,6 +1501,76 @@ with applications_tab:
                                     )
                                 except PDFExportError as exc:
                                     st.caption(f"PDF disabled: {exc}")
+
+                # ----- Share links -----
+                from services.sharing import (
+                    ShareError,
+                    create_share,
+                    list_shares_for_application,
+                    revoke as revoke_share,
+                )
+                with st.expander("🔗 Share read-only link"):
+                    base_url = os.getenv("APP_BASE_URL", "").rstrip("/")
+                    existing_shares = list_shares_for_application(
+                        st.session_state.user_id, rec.id,
+                    )
+                    with st.form(f"new_share_{rec.id}"):
+                        col_ttl, col_art = st.columns(2)
+                        with col_ttl:
+                            ttl_choice = st.selectbox(
+                                "Expiry",
+                                ["7 days", "30 days", "Never"],
+                                key=f"share_ttl_{rec.id}",
+                            )
+                        with col_art:
+                            include_artifacts = st.checkbox(
+                                "Include tailored artifacts",
+                                value=False,
+                                key=f"share_arts_{rec.id}",
+                            )
+                        if st.form_submit_button("Create share link", type="primary"):
+                            try:
+                                ttl_days = None if ttl_choice == "Never" else int(ttl_choice.split()[0])
+                                share = create_share(
+                                    st.session_state.user_id, rec.id,
+                                    ttl_days=ttl_days,
+                                    include_artifacts=include_artifacts,
+                                )
+                                link = (
+                                    f"{base_url}/?share={share.token}"
+                                    if base_url else f"?share={share.token}"
+                                )
+                                st.success("Share link created.")
+                                st.code(link, language=None)
+                            except ShareError as exc:
+                                st.error(str(exc))
+
+                    if existing_shares:
+                        st.markdown("**Existing share links**")
+                        for s in existing_shares:
+                            status = "active"
+                            if s.revoked_at:
+                                status = "revoked"
+                            elif s.expires_at and s.expires_at <= __import__("datetime").datetime.utcnow():
+                                status = "expired"
+                            col_info, col_act = st.columns([4, 1])
+                            with col_info:
+                                exp = s.expires_at.strftime("%Y-%m-%d") if s.expires_at else "Never"
+                                st.caption(
+                                    f"#{s.id} · _{status}_ · expires {exp} · "
+                                    f"{s.view_count} view(s)"
+                                )
+                                if status == "active":
+                                    link = (
+                                        f"{base_url}/?share={s.token}"
+                                        if base_url else f"?share={s.token}"
+                                    )
+                                    st.code(link, language=None)
+                            with col_act:
+                                if status == "active":
+                                    if st.button("Revoke", key=f"share_revoke_{s.id}"):
+                                        revoke_share(st.session_state.user_id, s.id)
+                                        st.rerun()
 
                 report = rec.analysis_json.get("final_report")
                 if report:
