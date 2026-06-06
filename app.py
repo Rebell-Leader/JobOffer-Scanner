@@ -1,4 +1,5 @@
 import os
+from datetime import date, timedelta
 
 import altair as alt
 import pandas as pd
@@ -16,6 +17,11 @@ from services.applications import (
     list_applications,
     save_analysis,
     update_status,
+)
+from services.checkpoint import (
+    CHECKPOINT_STAGES,
+    compute_key as compute_checkpoint_key,
+    get_store as get_checkpoint_store,
 )
 from services.bulk_import import (
     BulkImportError,
@@ -80,6 +86,11 @@ from services.notifications import (
     send_password_reset_email,
 )
 from services.rate_limit import RateLimitExceeded
+from services.reminders import (
+    set_inactive_threshold,
+    snooze_application,
+    unsnooze_application,
+)
 from services.telegram_link import (
     TelegramLinkError,
     get_link,
@@ -255,6 +266,29 @@ with st.sidebar.expander("📲 Link Telegram"):
                 st.rerun()
             except TelegramLinkError as exc:
                 st.error(str(exc))
+
+        # Inactivity-reminder threshold (0 disables the inactivity ping
+        # without losing per-stage notifications).
+        threshold_key = f"inactive_days_{st.session_state.user_id}"
+        new_threshold = st.number_input(
+            "Inactivity reminder threshold (days, 0 = off)",
+            min_value=0,
+            max_value=180,
+            value=link.inactive_reminder_days,
+            step=1,
+            key=threshold_key,
+        )
+        if int(new_threshold) != link.inactive_reminder_days:
+            try:
+                set_inactive_threshold(st.session_state.user_id, int(new_threshold))
+                st.rerun()
+            except PermissionError as exc:
+                st.error(str(exc))
+        st.caption(
+            "Scheduled job (`python -m worker.reminders`) sends a Telegram "
+            "summary of applications that haven't moved within this window."
+        )
+
         if st.button("Disconnect"):
             unlink(st.session_state.user_id)
             st.rerun()
@@ -506,6 +540,23 @@ with analyze_tab:
                     with tool_findings:
                         st.info(f"**{stage.title()}:** {stage_info}")
 
+            # Stable per-(user, inputs) checkpoint key so retrying the same
+            # form short-circuits stages that already completed.
+            checkpoint_key = compute_checkpoint_key(
+                posting_text, job_data, selected_model, resume_text,
+                user_id=st.session_state.user_id,
+            )
+            ckpt_store = get_checkpoint_store()
+            prior = ckpt_store.completed_stages(checkpoint_key)
+            if prior:
+                friendly = ", ".join(prior)
+                with tool_findings:
+                    st.info(
+                        f"♻ Resuming — stages already completed in this "
+                        f"session: **{friendly}**. Only missing stages will "
+                        "re-run."
+                    )
+
             with st.spinner("Analyzing job posting..."):
                 result = run_analysis(
                     posting_text,
@@ -513,10 +564,20 @@ with analyze_tab:
                     selected_model,
                     progress_callback=update_progress,
                     resume_text=resume_text,
+                    checkpoint_key=checkpoint_key,
                 )
 
             if result.get("error"):
                 st.error(f"Analysis failed: {result['error']}")
+                done = ckpt_store.completed_stages(checkpoint_key)
+                if done:
+                    st.info(
+                        "Earlier stages succeeded and were saved: "
+                        + ", ".join(done)
+                        + ". Click **🔍 Analyze posting** again to resume "
+                        "from where it failed — only the missing stages "
+                        "will re-run."
+                    )
             else:
                 status_text.text("Analysis completed!")
                 progress_bar.progress(100)
@@ -530,6 +591,8 @@ with analyze_tab:
                         job_data[field] = val or ""
                 st.session_state.last_result = result
                 st.session_state.last_inputs = job_data
+                # Clear the checkpoint — we have a complete result now.
+                ckpt_store.clear(checkpoint_key)
 
     # Render the last result (survives the rerun after Save).
     if st.session_state.get("last_result"):
@@ -744,6 +807,32 @@ with applications_tab:
                         if st.button("🗑️ Delete", key=f"del_{rec.id}"):
                             st.session_state[armed_key] = True
                             st.rerun()
+
+                    # Snooze inactivity reminders for this application.
+                    today = date.today()
+                    if rec.snooze_reminders_until and rec.snooze_reminders_until >= today:
+                        st.caption(
+                            f"🔕 Reminders snoozed until "
+                            f"{rec.snooze_reminders_until.isoformat()}"
+                        )
+                        if st.button("Unsnooze", key=f"unsnooze_{rec.id}"):
+                            unsnooze_application(st.session_state.user_id, rec.id)
+                            st.rerun()
+                    else:
+                        snooze_choice = st.selectbox(
+                            "🔕 Snooze reminders",
+                            ["Don't snooze", "7 days", "14 days", "30 days"],
+                            key=f"snooze_sel_{rec.id}",
+                            label_visibility="collapsed",
+                        )
+                        if snooze_choice != "Don't snooze":
+                            days = int(snooze_choice.split()[0])
+                            if st.button(f"Snooze {days}d", key=f"snooze_btn_{rec.id}"):
+                                snooze_application(
+                                    st.session_state.user_id, rec.id,
+                                    today + timedelta(days=days),
+                                )
+                                st.rerun()
 
                 with st.form(f"update_{rec.id}"):
                     new_status = st.selectbox(

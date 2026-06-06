@@ -11,7 +11,7 @@ import csv
 import io
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, List, Optional
 
 from sqlalchemy import desc, select
@@ -35,6 +35,7 @@ class ApplicationRecord:
     verdict_light: Optional[str]
     ats_score: Optional[int]
     notes: Optional[str]
+    snooze_reminders_until: Optional["date"]  # noqa: F821 (date imported below)
     created_at: datetime
     updated_at: datetime
     analysis_json: dict
@@ -51,6 +52,7 @@ def _to_record(app: Application) -> ApplicationRecord:
         verdict_light=app.verdict_light,
         ats_score=app.ats_score,
         notes=app.notes,
+        snooze_reminders_until=app.snooze_reminders_until,
         created_at=app.created_at,
         updated_at=app.updated_at,
         analysis_json=app.analysis_json or {},

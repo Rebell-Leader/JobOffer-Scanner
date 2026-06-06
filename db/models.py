@@ -120,6 +120,11 @@ class Application(Base):
     # SQLite and Postgres.
     analysis_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
+    # Reminder muting — set to a future date to silence the inactivity
+    # notifier for this specific application. The notifier respects this
+    # field; the per-user threshold lives on TelegramLink.
+    snooze_reminders_until: Mapped[Optional[date]] = mapped_column(Date)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
@@ -346,6 +351,9 @@ class TelegramLink(Base):
     chat_id: Mapped[int] = mapped_column(sa_BigInt, nullable=False, index=True)
     chat_username: Mapped[Optional[str]] = mapped_column(String(64))
     notify_on_stage: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # The inactivity-reminder threshold. Set to 0 to disable inactivity
+    # reminders entirely without losing per-stage notifications.
+    inactive_reminder_days: Mapped[int] = mapped_column(default=7, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="telegram_link")

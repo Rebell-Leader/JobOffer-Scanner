@@ -56,6 +56,7 @@ class LinkRecord:
     chat_id: int
     chat_username: Optional[str]
     notify_on_stage: bool
+    inactive_reminder_days: int
     created_at: datetime
 
 
@@ -65,6 +66,7 @@ def _to_record(link: TelegramLink) -> LinkRecord:
         chat_id=link.chat_id,
         chat_username=link.chat_username,
         notify_on_stage=link.notify_on_stage,
+        inactive_reminder_days=link.inactive_reminder_days,
         created_at=link.created_at,
     )
 

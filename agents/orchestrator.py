@@ -10,6 +10,11 @@ from agents import (
     resume_analyzer,
     salary_analyzer,
 )
+from services.checkpoint import (
+    CHECKPOINT_STAGES,
+    CheckpointPayload,
+    get_store,
+)
 
 
 class JobAnalysisState(TypedDict, total=False):
@@ -19,22 +24,53 @@ class JobAnalysisState(TypedDict, total=False):
     job_details: dict
     company_analysis: dict
     salary_analysis: dict
-    resume_text: str          # raw resume text (optional)
-    resume_analysis: dict     # ATS / gap analysis output
+    resume_text: str
+    resume_analysis: dict
     final_report: str
-    verdict: dict             # structured Green/Yellow/Red verdict
+    verdict: dict
     error: str
     manual_inputs: Optional[dict]
     model: Optional[str]
     progress_callback: Optional[Callable]
+    checkpoint_key: Optional[str]
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint-aware wrappers around the individual stage agents
+# ---------------------------------------------------------------------------
+
+def _save_checkpoint(state: Dict, stage: str, value) -> None:
+    key = state.get("checkpoint_key")
+    if not key or value in (None, {}, ""):
+        return
+    get_store().set(key, stage, value)
+
+
+def _restore(state: Dict) -> CheckpointPayload:
+    key = state.get("checkpoint_key")
+    return get_store().get(key) if key else CheckpointPayload()
+
+
+def _analyze_job_with_checkpoint(state: Dict) -> Dict:
+    ckpt = _restore(state)
+    if ckpt.has("job_details"):
+        state["job_details"] = ckpt.get("job_details")
+        cb = state.get("progress_callback")
+        if cb:
+            cb("job", 25, "Restored from checkpoint")
+        return state
+    state = job_analyzer.analyze(state)
+    if not state.get("error"):
+        _save_checkpoint(state, "job_details", state.get("job_details"))
+    return state
 
 
 def _analyze_company_and_salary(state: Dict) -> Dict:
-    """Run company + salary analysis concurrently.
+    """Run company + salary concurrently, honoring per-stage checkpoints.
 
-    They depend only on the job stage, not each other. Progress callbacks fire
-    from THIS (main) thread; worker copies have their callback disabled to
-    avoid cross-thread UI updates.
+    Either branch can independently consult / write the checkpoint — so a
+    partial run where (e.g.) salary failed but company succeeded won't redo
+    the company call on retry.
     """
     if state.get("error"):
         return state
@@ -43,33 +79,90 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
     if callback:
         callback("company", 50)
 
+    ckpt = _restore(state)
+    company_done = ckpt.has("company_analysis")
+    salary_done = ckpt.has("salary_analysis")
+
+    if company_done:
+        state["company_analysis"] = ckpt.get("company_analysis")
+    if salary_done:
+        state["salary_analysis"] = ckpt.get("salary_analysis")
+
+    if company_done and salary_done:
+        return state
+
     worker_state = dict(state)
     worker_state["progress_callback"] = None
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        company_future = pool.submit(company_analyzer.analyze, dict(worker_state))
-        salary_future = pool.submit(salary_analyzer.analyze, dict(worker_state))
-        company_result = company_future.result()
-        salary_result = salary_future.result()
+        futures = {}
+        if not company_done:
+            futures["company"] = pool.submit(company_analyzer.analyze, dict(worker_state))
+        if not salary_done:
+            futures["salary"] = pool.submit(salary_analyzer.analyze, dict(worker_state))
+        results = {name: f.result() for name, f in futures.items()}
 
-    error = company_result.get("error") or salary_result.get("error")
+    # Surface the first error from either branch — but persist whichever
+    # half succeeded so a retry doesn't redo it.
+    error = next(
+        (r.get("error") for r in results.values() if r.get("error")),
+        "",
+    )
+
+    if "company" in results and not results["company"].get("error"):
+        state["company_analysis"] = results["company"].get("company_analysis", {})
+        _save_checkpoint(state, "company_analysis", state["company_analysis"])
+    if "salary" in results and not results["salary"].get("error"):
+        state["salary_analysis"] = results["salary"].get("salary_analysis", {})
+        _save_checkpoint(state, "salary_analysis", state["salary_analysis"])
+
     if error:
         state["error"] = error
-
-    state["company_analysis"] = company_result.get("company_analysis", {})
-    state["salary_analysis"] = salary_result.get("salary_analysis", {})
 
     if callback:
         callback("salary", 75)
     return state
 
 
+def _analyze_resume_with_checkpoint(state: Dict) -> Dict:
+    if state.get("error"):
+        return state
+    if not state.get("resume_text"):
+        return state  # resume is optional — no checkpoint, no work
+    ckpt = _restore(state)
+    if ckpt.has("resume_analysis"):
+        state["resume_analysis"] = ckpt.get("resume_analysis")
+        return state
+    state = resume_analyzer.analyze(state)
+    if not state.get("error") and state.get("resume_analysis"):
+        _save_checkpoint(state, "resume_analysis", state["resume_analysis"])
+    return state
+
+
+def _generate_report_with_checkpoint(state: Dict) -> Dict:
+    if state.get("error"):
+        return state
+    ckpt = _restore(state)
+    if ckpt.has("verdict_and_report"):
+        bundle = ckpt.get("verdict_and_report") or {}
+        state["final_report"] = bundle.get("final_report", "")
+        state["verdict"] = bundle.get("verdict", {})
+        return state
+    state = report_generator.generate(state)
+    if not state.get("error"):
+        _save_checkpoint(state, "verdict_and_report", {
+            "final_report": state.get("final_report", ""),
+            "verdict": state.get("verdict", {}),
+        })
+    return state
+
+
 def create_analysis_graph():
     workflow = StateGraph(JobAnalysisState)
-    workflow.add_node("analyze_job", job_analyzer.analyze)
+    workflow.add_node("analyze_job", _analyze_job_with_checkpoint)
     workflow.add_node("analyze_company_and_salary", _analyze_company_and_salary)
-    workflow.add_node("analyze_resume", resume_analyzer.analyze)
-    workflow.add_node("generate_report", report_generator.generate)
+    workflow.add_node("analyze_resume", _analyze_resume_with_checkpoint)
+    workflow.add_node("generate_report", _generate_report_with_checkpoint)
 
     workflow.add_edge("analyze_job", "analyze_company_and_salary")
     workflow.add_edge("analyze_company_and_salary", "analyze_resume")
@@ -85,12 +178,15 @@ def run_analysis(
     model: str = "detailed",
     progress_callback: Optional[Callable] = None,
     resume_text: Optional[str] = None,
+    checkpoint_key: Optional[str] = None,
 ) -> dict:
     """Run the analysis pipeline.
 
-    ``model`` is a logical tier ("fast"/"detailed") or an explicit model id;
-    the LLM layer resolves it for whichever provider is active.
-    ``resume_text`` is optional — when present, the resume/ATS stage runs.
+    ``checkpoint_key`` opt-in: when present, completed stages are read from
+    (and new completions written to) the in-process checkpoint store. A retry
+    of the same call with the same key only re-runs failed/missing stages.
+    On a successful end-to-end run the caller should clear the checkpoint
+    (the UI does this after rendering the result).
     """
     graph = create_analysis_graph()
 
@@ -107,6 +203,7 @@ def run_analysis(
         "manual_inputs": manual_inputs,
         "model": model,
         "progress_callback": progress_callback,
+        "checkpoint_key": checkpoint_key,
     }
 
     if progress_callback:
