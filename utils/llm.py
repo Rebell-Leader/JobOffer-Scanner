@@ -198,6 +198,16 @@ def _complete_anthropic(prompt, model, system, temperature, max_tokens) -> str:
     return "".join(parts).strip()
 
 
+def _is_new_style_openai_model(model: str) -> bool:
+    """Return True for models that use max_completion_tokens and reject temperature.
+
+    Covers the o-series reasoning models and the gpt-5 family, which dropped
+    the legacy max_tokens / temperature parameters.
+    """
+    prefixes = ("o1", "o3", "o4", "gpt-5")
+    return any(model.startswith(p) for p in prefixes)
+
+
 def _complete_openai_compatible(
     provider, prompt, model, system, temperature, max_tokens
 ) -> str:
@@ -212,15 +222,26 @@ def _complete_openai_compatible(
     else:  # openai
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0)
 
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-    )
+    # gpt-5 / o-series models use max_completion_tokens and reject temperature.
+    if provider == "openai" and _is_new_style_openai_model(model):
+        resp = client.chat.completions.create(
+            model=model,
+            max_completion_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
+    else:
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+        )
     return (resp.choices[0].message.content or "").strip()
 
 
