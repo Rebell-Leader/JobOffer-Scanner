@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = float(os.getenv("DATA_SOURCE_TIMEOUT", "10"))
 _NEWS_ENDPOINT = "https://newsapi.org/v2/everything"
+_ADZUNA_ENDPOINT = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,100 @@ def _format_layoffs(records: list, company_name: str) -> str:
         count = r.get("laid_off") or r.get("count") or "?"
         lines.append(f"- {date}: {count} roles")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Salary benchmark (Adzuna)
+# ---------------------------------------------------------------------------
+
+_ADZUNA_DEFAULT_COUNTRY = "us"
+
+# Adzuna covers a fixed list of country codes; map common location terms to
+# them so a user typing "Berlin, Germany" hits the German feed.
+_COUNTRY_HINTS = {
+    "us": "us", "usa": "us", "united states": "us",
+    "uk": "gb", "united kingdom": "gb", "england": "gb", "scotland": "gb",
+    "germany": "de", "berlin": "de", "munich": "de", "deutschland": "de",
+    "france": "fr", "paris": "fr",
+    "netherlands": "nl", "amsterdam": "nl",
+    "australia": "au", "sydney": "au", "melbourne": "au",
+    "canada": "ca", "toronto": "ca", "vancouver": "ca",
+    "poland": "pl", "warsaw": "pl",
+    "india": "in", "bangalore": "in", "mumbai": "in",
+    "singapore": "sg",
+    "brazil": "br",
+    "italy": "it", "rome": "it", "milan": "it",
+    "spain": "es", "madrid": "es", "barcelona": "es",
+    "austria": "at", "vienna": "at",
+    "switzerland": "ch", "zurich": "ch",
+    "new zealand": "nz",
+    "mexico": "mx",
+    "south africa": "za",
+}
+
+
+def _country_for_location(location: Optional[str]) -> str:
+    if not location:
+        return _ADZUNA_DEFAULT_COUNTRY
+    loc = location.lower()
+    for hint, code in _COUNTRY_HINTS.items():
+        if hint in loc:
+            return code
+    return _ADZUNA_DEFAULT_COUNTRY
+
+
+def _summarize_adzuna(payload: dict, job_title: str, location: str) -> Optional[str]:
+    results = payload.get("results") or []
+    salaries = [
+        (r.get("salary_min"), r.get("salary_max"), r.get("salary_is_predicted"))
+        for r in results
+        if r.get("salary_min") and r.get("salary_max")
+    ]
+    if not salaries:
+        return None
+    lows = [s[0] for s in salaries]
+    highs = [s[1] for s in salaries]
+    medians = [(s[0] + s[1]) / 2 for s in salaries]
+    currency = (results[0].get("salary_currency") or "").upper() or "local"
+    predicted_share = sum(1 for s in salaries if str(s[2]) in ("1", "True", "true"))
+    return (
+        f"REAL DATA (Adzuna, {len(salaries)} matching postings for "
+        f"'{job_title}' near '{location}'):\n"
+        f"- Median: {round(sum(medians)/len(medians)):,} {currency}\n"
+        f"- p10/p90 (approx): {min(lows):,} / {max(highs):,} {currency}\n"
+        f"- Predicted salaries (Adzuna ML): {predicted_share}/{len(salaries)} postings\n"
+        f"Treat as a market snapshot, not a personal offer benchmark."
+    )
+
+
+def fetch_salary_benchmark(
+    job_title: str, location: Optional[str]
+) -> Optional[str]:
+    """Real salary benchmark via Adzuna when configured, else ``None``."""
+    app_id = os.getenv("ADZUNA_APP_ID")
+    app_key = os.getenv("ADZUNA_APP_KEY")
+    if not app_id or not app_key or not job_title:
+        return None
+
+    country = _country_for_location(location)
+    url = _ADZUNA_ENDPOINT.format(country=country)
+    params = {
+        "app_id": app_id,
+        "app_key": app_key,
+        "what": job_title,
+        "results_per_page": 50,
+        "content-type": "application/json",
+    }
+    if location:
+        params["where"] = location
+
+    try:
+        resp = requests.get(url, params=params, timeout=_HTTP_TIMEOUT)
+        resp.raise_for_status()
+        return _summarize_adzuna(resp.json(), job_title, location or country.upper())
+    except Exception as exc:  # noqa: BLE001 - degrade to heuristic fallback
+        logger.warning("Adzuna fetch failed for %s in %s: %s", job_title, location, exc)
+        return None
 
 
 def fetch_layoffs(company_name: str) -> Optional[str]:

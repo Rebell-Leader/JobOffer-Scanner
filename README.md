@@ -56,16 +56,38 @@ returns sample data — never silently. See `.env.example`.
 - ✅ 36 unit tests total (15 new for auth & applications: ownership
   isolation, password hashing, duplicate detection, callable-stripping)
 
+### Phase 4 (shipped)
+- ✅ **Password reset & change-password** — bcrypt-hashed one-shot reset
+  tokens with 1-hour expiry, no user-enumeration leak (`services/auth.py`);
+  raw token never stored. UI exposes Forgot Password, Use Reset Token, and
+  a Change Password sidebar form. Token delivery left pluggable (printed to
+  server logs by default; set `RESET_TOKEN_SURFACE_IN_UI=1` for self-hosted
+  single-operator deployments).
+- ✅ **Real salary benchmarks via Adzuna** — when `ADZUNA_APP_ID` + 
+  `ADZUNA_APP_KEY` are set, the salary stage pulls live posting data
+  (median, p10/p90, predicted-share) and tells the LLM to treat it as the
+  primary signal; the heuristic table becomes a cross-check only. Routes
+  to the right country feed automatically. Degrades to labelled-ESTIMATE
+  heuristics when unconfigured.
+- ✅ **Telegram bot channel** (`bot/`) — the second entry point from the
+  vision doc, sharing the analysis pipeline. `/start`, `/help`, `/analyze
+  <url-or-text>`. Long reports auto-chunked on paragraph boundaries to fit
+  Telegram's 4096-char limit. Run with `python -m bot.main` after setting
+  `TELEGRAM_BOT_TOKEN`. `python-telegram-bot` is an optional extra
+  (`pip install -e ".[telegram]"`).
+- ✅ **CI** (`.github/workflows/tests.yml`) — full unittest suite runs on
+  push and pull_request against Python 3.11 and 3.12.
+- ✅ 59 unit tests total (23 new for reset/change-password, Adzuna summary,
+  Telegram parsing/chunking/formatting/handler logic).
+
 ### Honest Gaps (next)
-- 🔄 Salary & COL figures still come from internal heuristics (labelled
-  ESTIMATE), not Glassdoor/Numbeo/levels.fyi
+- 🔄 Cost-of-living figures still come from internal heuristics (labelled
+  ESTIMATE); a real COL data source remains to be wired
 - ❌ No async job queue for large workloads (still in-process)
 - ❌ JS-heavy job boards (LinkedIn / Indeed / Glassdoor) need a real headless
   scraper; the generic URL ingest is best-effort only
-- ❌ No CI yet — tests pass locally but aren't enforced on PR
 - ❌ Schema migrations are `create_all`-only; Alembic comes when fields evolve
-- ❌ No password reset / email verification flow — minimal auth only
-- ❌ Telegram bot channel from the original vision doc not built
+- ❌ Email delivery for reset tokens not bundled — by design (pluggable)
 
 ## 🎯 Roadmap: Production-Ready Features
 

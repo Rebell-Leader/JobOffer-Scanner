@@ -20,6 +20,7 @@ try:
 except ImportError:  # pragma: no cover - older langchain layout
     from langchain.tools import Tool
 
+from tools.data_sources import fetch_salary_benchmark
 from utils.cache import cache
 from utils.llm import get_completion
 
@@ -37,8 +38,29 @@ def estimate_salary_range(job_title, location, experience_level, model="detailed
     if cached:
         return cached
 
+    real_benchmark = fetch_salary_benchmark(job_title, location)
     heuristic_salary = _get_heuristic_salary_data(job_title, location, experience_level)
     heuristic_col = _get_heuristic_cost_of_living(location)
+
+    if real_benchmark:
+        salary_block = (
+            f"Adzuna market data (REAL, treat as primary signal):\n{real_benchmark}\n\n"
+            f"Heuristic estimate (internal model, for cross-check only — "
+            f"prefer the Adzuna figures when they disagree):\n{heuristic_salary}"
+        )
+        primary_note = (
+            "Primary salary figures are from live Adzuna postings. The heuristic "
+            "below is a cross-check only — use Adzuna when they conflict."
+        )
+    else:
+        salary_block = (
+            f"Heuristic salary estimate (internal model, NOT market data — "
+            f"label as ESTIMATE):\n{heuristic_salary}"
+        )
+        primary_note = (
+            "No live salary feed configured (set ADZUNA_APP_ID + ADZUNA_APP_KEY). "
+            "Figures below are heuristic estimates only — label them as ESTIMATE."
+        )
 
     prompt = f"""
 Produce a markdown salary analysis for:
@@ -46,11 +68,10 @@ Produce a markdown salary analysis for:
 - Location: {location}
 - Experience Level: {experience_level or "not specified"}
 
-The numeric figures below are HEURISTIC ESTIMATES from internal multiplier
-tables, NOT live benchmark data. Treat them as a starting point only.
+{primary_note}
 
-Heuristic salary estimate (internal model, not market data):
-{heuristic_salary}
+Salary signals:
+{salary_block}
 
 Heuristic cost-of-living estimate (internal model, not Numbeo data):
 {heuristic_col}

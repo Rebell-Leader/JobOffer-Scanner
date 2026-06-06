@@ -1,3 +1,5 @@
+import os
+
 import streamlit as st
 
 from agents.orchestrator import run_analysis
@@ -10,7 +12,14 @@ from services.applications import (
     save_analysis,
     update_status,
 )
-from services.auth import AuthError, authenticate_user, register_user
+from services.auth import (
+    AuthError,
+    authenticate_user,
+    change_password,
+    complete_password_reset,
+    register_user,
+    request_password_reset,
+)
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
@@ -39,9 +48,17 @@ else:
 # Auth gate
 # ---------------------------------------------------------------------------
 
+_RESET_GENERIC_NOTICE = (
+    "If an account exists for that email, a reset token has been generated. "
+    "Check your email — or, in self-hosted/demo mode, your server logs."
+)
+
+
 def render_auth() -> None:
     st.write("Sign in or create an account to save your analyses and track applications.")
-    login_tab, register_tab = st.tabs(["Sign in", "Create account"])
+    login_tab, register_tab, forgot_tab, reset_tab = st.tabs(
+        ["Sign in", "Create account", "Forgot password", "Use reset token"]
+    )
 
     with login_tab:
         with st.form("login_form"):
@@ -75,6 +92,42 @@ def render_auth() -> None:
                 except AuthError as exc:
                     st.error(str(exc))
 
+    with forgot_tab:
+        with st.form("forgot_form"):
+            st.write(
+                "We'll generate a one-shot reset token (valid for 1 hour). "
+                "Email delivery is intentionally not bundled — wire SMTP/SES "
+                "in your environment, or read the token from server logs for "
+                "self-hosted deployments."
+            )
+            email = st.text_input("Email", key="forgot_email")
+            if st.form_submit_button("Request reset token", type="primary"):
+                token = request_password_reset(email)
+                if token is not None:
+                    # Self-hosted convenience: surface the token so a single
+                    # operator can complete the flow without email. Real
+                    # multi-tenant deployments must NOT keep this branch.
+                    if os.getenv("RESET_TOKEN_SURFACE_IN_UI") == "1":
+                        st.code(token, language=None)
+                        st.caption("RESET_TOKEN_SURFACE_IN_UI=1 — disable in production.")
+                    print(f"[auth] reset token for {email}: {token}")
+                # Always show the same notice — never reveal whether the email exists.
+                st.info(_RESET_GENERIC_NOTICE)
+
+    with reset_tab:
+        with st.form("reset_form"):
+            email = st.text_input("Email", key="reset_email")
+            token = st.text_input("Reset token", key="reset_token")
+            new_pw = st.text_input(
+                "New password", type="password", key="reset_pw", help="Minimum 8 characters."
+            )
+            if st.form_submit_button("Reset password", type="primary"):
+                try:
+                    complete_password_reset(email, token, new_pw)
+                    st.success("Password reset. Sign in with your new password.")
+                except AuthError as exc:
+                    st.error(str(exc))
+
 
 if "user_id" not in st.session_state:
     render_auth()
@@ -90,6 +143,17 @@ if st.sidebar.button("Sign out"):
     for key in ("user_id", "user_email", "last_result", "last_inputs"):
         st.session_state.pop(key, None)
     st.rerun()
+
+with st.sidebar.expander("🔒 Change password"):
+    with st.form("change_pw_form"):
+        cur_pw = st.text_input("Current password", type="password", key="cur_pw")
+        new_pw = st.text_input("New password", type="password", key="new_pw", help="Minimum 8 characters.")
+        if st.form_submit_button("Update password"):
+            try:
+                change_password(st.session_state.user_id, cur_pw, new_pw)
+                st.success("Password updated.")
+            except AuthError as exc:
+                st.error(str(exc))
 
 st.sidebar.title("About")
 st.sidebar.info(

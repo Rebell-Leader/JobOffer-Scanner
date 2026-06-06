@@ -16,3 +16,6 @@ dependencies = [
     "sqlalchemy>=2.0.30",
     "streamlit>=1.42.2",
 ]
+
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=21.0"]
