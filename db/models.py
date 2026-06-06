@@ -60,6 +60,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    two_factor: Mapped[Optional["UserTwoFactor"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     master_cv: Mapped[Optional["MasterCV"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -74,6 +79,40 @@ class User(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+
+
+class UserTwoFactor(Base):
+    """TOTP-based second factor for one user.
+
+    ``secret`` is the base32 TOTP shared secret. It is stored unencrypted
+    here — for production-grade key protection, layer in an envelope-
+    encryption step using a KMS-derived key. TOTP is secondary defence;
+    the primary protection against credential stuffing is the bcrypt
+    password hash, which remains intact under a DB-only compromise.
+
+    ``backup_codes`` is the list of bcrypt-hashed one-time recovery codes
+    the user can use instead of an OTP. Used codes are removed from the
+    list. The ``verified`` flag tracks the setup ceremony — a row exists
+    after ``start_setup`` but ``verified=False`` until the user proves
+    they've successfully scanned the secret by entering a live OTP.
+    """
+
+    __tablename__ = "user_two_factor"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True,
+    )
+    secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    verified: Mapped[bool] = mapped_column(default=False, nullable=False)
+    backup_codes: Mapped[Optional[list]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship(back_populates="two_factor")
 
 
 class PasswordResetToken(Base):
@@ -323,6 +362,11 @@ AUDIT_KINDS = (
     "user.password.change",
     "user.password.reset.request",
     "user.password.reset.complete",
+    "user.2fa.enable",
+    "user.2fa.disable",
+    "user.2fa.verify.success",
+    "user.2fa.verify.failure",
+    "user.2fa.backup_code.used",
     "application.delete",
     "telegram.bind",
     "telegram.unbind",

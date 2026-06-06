@@ -93,6 +93,16 @@ from services.notifications import (
     notify_stage_added,
     send_password_reset_email,
 )
+from services.totp import (
+    TOTPError,
+    confirm_setup as totp_confirm_setup,
+    disable as totp_disable,
+    is_enabled as totp_is_enabled,
+    pending_setup as totp_pending_setup,
+    remaining_backup_codes as totp_backup_codes_left,
+    start_setup as totp_start_setup,
+    verify_login as totp_verify_login,
+)
 from services.rate_limit import RateLimitExceeded
 from services.reminders import (
     set_inactive_threshold,
@@ -156,19 +166,63 @@ def render_auth() -> None:
     )
 
     with login_tab:
-        with st.form("login_form"):
-            email = st.text_input("Email", key="login_email")
-            password = st.text_input("Password", type="password", key="login_password")
-            if st.form_submit_button("Sign in", type="primary"):
+        # Two-step state: if the user passed password and is now expected to
+        # provide a TOTP, render the OTP form instead of the password form.
+        if st.session_state.get("pending_2fa_user_id"):
+            pending_id = st.session_state["pending_2fa_user_id"]
+            pending_email = st.session_state.get("pending_2fa_email", "")
+            st.info(
+                f"Signed into **{pending_email}**. Enter the 6-digit code "
+                "from your authenticator app (or one of your backup codes) "
+                "to continue."
+            )
+            with st.form("otp_form"):
+                otp = st.text_input(
+                    "Authenticator code", key="otp_input",
+                    placeholder="123456 or XXXXX-XXXXX",
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    submit_otp = st.form_submit_button("Verify", type="primary")
+                with c2:
+                    cancel_otp = st.form_submit_button("Cancel")
+            if cancel_otp:
+                st.session_state.pop("pending_2fa_user_id", None)
+                st.session_state.pop("pending_2fa_email", None)
+                st.rerun()
+            if submit_otp:
                 try:
-                    user = authenticate_user(email, password)
-                    st.session_state.user_id = user.id
-                    st.session_state.user_email = user.email
-                    st.rerun()
+                    if totp_verify_login(pending_id, otp):
+                        st.session_state.user_id = pending_id
+                        st.session_state.user_email = pending_email
+                        st.session_state.pop("pending_2fa_user_id", None)
+                        st.session_state.pop("pending_2fa_email", None)
+                        st.rerun()
+                    else:
+                        st.error("That code didn't match. Try again.")
                 except RateLimitExceeded as exc:
                     st.error(str(exc))
-                except AuthError as exc:
-                    st.error(str(exc))
+        else:
+            with st.form("login_form"):
+                email = st.text_input("Email", key="login_email")
+                password = st.text_input(
+                    "Password", type="password", key="login_password",
+                )
+                if st.form_submit_button("Sign in", type="primary"):
+                    try:
+                        user = authenticate_user(email, password)
+                        if user.two_factor_required:
+                            st.session_state.pending_2fa_user_id = user.id
+                            st.session_state.pending_2fa_email = user.email
+                            st.rerun()
+                        else:
+                            st.session_state.user_id = user.id
+                            st.session_state.user_email = user.email
+                            st.rerun()
+                    except RateLimitExceeded as exc:
+                        st.error(str(exc))
+                    except AuthError as exc:
+                        st.error(str(exc))
 
     with register_tab:
         with st.form("register_form"):
@@ -248,6 +302,80 @@ with st.sidebar.expander("📜 My recent activity"):
             st.caption(
                 f"`{ev.created_at.strftime('%Y-%m-%d %H:%M')}` — `{ev.kind}`"
             )
+
+with st.sidebar.expander("🔐 Two-factor authentication"):
+    if totp_is_enabled(st.session_state.user_id):
+        remaining = totp_backup_codes_left(st.session_state.user_id)
+        st.success(f"2FA is **enabled**. {remaining} backup code(s) remaining.")
+        st.caption(
+            "To disable, enter your current password and confirm."
+        )
+        with st.form("2fa_disable_form"):
+            cur_pw = st.text_input(
+                "Current password", type="password", key="2fa_disable_pw",
+            )
+            if st.form_submit_button("Disable 2FA"):
+                try:
+                    totp_disable(st.session_state.user_id, cur_pw)
+                    st.success("2FA disabled.")
+                    st.rerun()
+                except TOTPError as exc:
+                    st.error(str(exc))
+    else:
+        # Setup ceremony lives across reruns in session_state.
+        if not st.session_state.get("totp_setup_secret"):
+            if st.button("Start 2FA setup"):
+                try:
+                    setup = totp_start_setup(
+                        st.session_state.user_id,
+                        st.session_state.user_email,
+                    )
+                    st.session_state.totp_setup_secret = setup.secret
+                    st.session_state.totp_setup_uri = setup.provisioning_uri
+                    st.rerun()
+                except TOTPError as exc:
+                    st.error(str(exc))
+        else:
+            try:
+                import io
+                import qrcode
+
+                img = qrcode.make(st.session_state.totp_setup_uri)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                st.image(buf.getvalue(), caption="Scan in your authenticator app")
+            except ImportError:
+                pass
+            with st.expander("Or enter the secret manually"):
+                st.code(st.session_state.totp_setup_secret, language=None)
+            with st.form("2fa_confirm_form"):
+                otp = st.text_input("Enter the current 6-digit code")
+                if st.form_submit_button("Confirm setup", type="primary"):
+                    try:
+                        result = totp_confirm_setup(st.session_state.user_id, otp)
+                        st.session_state.totp_backup_codes_once = result.backup_codes
+                        st.session_state.pop("totp_setup_secret", None)
+                        st.session_state.pop("totp_setup_uri", None)
+                        st.rerun()
+                    except TOTPError as exc:
+                        st.error(str(exc))
+            if st.button("Cancel setup", key="2fa_cancel"):
+                st.session_state.pop("totp_setup_secret", None)
+                st.session_state.pop("totp_setup_uri", None)
+                st.rerun()
+
+        # One-shot display of freshly-generated backup codes.
+        if st.session_state.get("totp_backup_codes_once"):
+            st.success("✅ 2FA enabled!")
+            st.warning(
+                "**Save these backup codes now.** Each works once — store "
+                "them somewhere safe. You will NOT see them again."
+            )
+            for code in st.session_state["totp_backup_codes_once"]:
+                st.code(code, language=None)
+            if st.button("I've saved them — hide"):
+                st.session_state.pop("totp_backup_codes_once", None)
+                st.rerun()
 
 with st.sidebar.expander("🔒 Change password"):
     with st.form("change_pw_form"):

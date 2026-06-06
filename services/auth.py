@@ -49,6 +49,7 @@ class AuthError(ValueError):
 class AuthedUser:
     id: int
     email: str
+    two_factor_required: bool = False
 
 
 def _normalize_email(email: str) -> str:
@@ -111,6 +112,20 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
             raise AuthError("Invalid email or password.")
         # Clean break so a few past typos don't keep penalizing a legit login.
         LOGIN_LIMITER.reset(email)
+        # Check for 2FA — return a signal but DON'T mark this as a fully
+        # successful login yet (audit and rate-limit reset already happened,
+        # which is correct: the password phase succeeded).
+        from services.totp import is_enabled as _totp_enabled
+
+        if _totp_enabled(user.id):
+            _audit(
+                "user.login.success",
+                user_id=user.id,
+                details={"email": email, "second_factor_pending": True},
+            )
+            return AuthedUser(
+                id=user.id, email=user.email, two_factor_required=True,
+            )
         _audit("user.login.success", user_id=user.id, details={"email": email})
         return AuthedUser(id=user.id, email=user.email)
 
