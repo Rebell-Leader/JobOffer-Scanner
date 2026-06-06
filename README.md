@@ -96,6 +96,32 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 8 (shipped) — pipeline tracking + analytics
+- ✅ **Application stage tracker** (`db.models.ApplicationStage`,
+  `services/stages.py`) — every milestone (applied, recruiter / phone /
+  technical screen, take-home, onsite, offer, accept, reject, withdraw,
+  ghost) lives as its own dated row with optional notes and a structured
+  ``extra`` payload (offer comp, verbatim feedback, rejection reason).
+- ✅ **Auto status sync** — the legacy ``Application.status`` field stays
+  consistent with the latest stage event automatically, so the existing
+  filters and badges keep working. Deleting the latest stage reverts status.
+- ✅ **Analytics dashboard** (`services/analytics.py`, new "📊 Analytics"
+  tab) — derives funnel counts + stage-over-stage conversion rates,
+  per-pair time-in-stage averages with sample sizes, verdict→outcome
+  correlation table, rejection-stage histogram, applications-per-week
+  volume. Zero-reach pipeline stages are skipped so the displayed funnel
+  reflects real signal. Empty state for new users.
+- ✅ **Per-application stages UI** — chronological timeline inside each
+  application expander, one-click quick-action buttons for the common
+  transitions, and a detailed add-stage form (date + notes +
+  at_pipeline_stage for terminal events).
+- ✅ Alembic migration ``c067abb9272c`` adds ``application_stages``.
+- ✅ 118 unit tests total (18 new: stage CRUD + ownership isolation,
+  auto status sync (including by-date ordering and delete-revert),
+  funnel counts & conversion rates, time-in-stage with real per-app
+  walks, verdict outcomes, rejection-stage distribution, empty state,
+  migration applies cleanly).
+
 ### Phase 7 (shipped)
 - ✅ **Rate limiting** (`services/rate_limit.py`) — sliding-window limiter
   with thread-safe in-memory backend (default) and Redis backend

@@ -5,6 +5,7 @@ import streamlit as st
 from agents.orchestrator import run_analysis
 from db.models import APPLICATION_STATUSES
 from db.session import init_db
+from services.analytics import compute_dashboard
 from services.applications import (
     ApplicationError,
     delete_application,
@@ -13,6 +14,13 @@ from services.applications import (
     list_applications,
     save_analysis,
     update_status,
+)
+from services.stages import (
+    QUICK_ACTIONS,
+    StageError,
+    add_stage,
+    delete_stage,
+    list_stages,
 )
 from services.auth import (
     AuthError,
@@ -187,7 +195,9 @@ if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.pop(key, None)
     st.rerun()
 
-analyze_tab, applications_tab = st.tabs(["🔍 Analyze a posting", "📌 My Applications"])
+analyze_tab, applications_tab, analytics_tab = st.tabs(
+    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics"]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +589,78 @@ with applications_tab:
                         except ApplicationError as exc:
                             st.error(str(exc))
 
+                # ----- Pipeline stages -----
+                st.markdown("##### 🪜 Pipeline stages")
+                stages = list_stages(st.session_state.user_id, rec.id)
+                if stages:
+                    for s in stages:
+                        line = (
+                            f"- **{s.occurred_on.isoformat()}** · "
+                            f"`{s.kind}`"
+                        )
+                        if s.at_pipeline_stage:
+                            line += f" _(at: {s.at_pipeline_stage})_"
+                        if s.notes:
+                            line += f" — {s.notes}"
+                        cols = st.columns([10, 1])
+                        cols[0].markdown(line)
+                        if cols[1].button("🗑️", key=f"stage_del_{s.id}"):
+                            try:
+                                delete_stage(st.session_state.user_id, s.id)
+                                st.rerun()
+                            except StageError as exc:
+                                st.error(str(exc))
+                else:
+                    st.caption("_No stages yet — record what happened next:_")
+
+                # Quick-action buttons (one-click stage adds with today's date).
+                qa_cols = st.columns(3)
+                for idx, (label, kind) in enumerate(QUICK_ACTIONS):
+                    if qa_cols[idx % 3].button(label, key=f"qa_{rec.id}_{kind}"):
+                        try:
+                            add_stage(st.session_state.user_id, rec.id, kind=kind)
+                            st.rerun()
+                        except StageError as exc:
+                            st.error(str(exc))
+
+                # Detailed add-stage form (date + notes + at_pipeline_stage).
+                with st.expander("➕ Add a stage with details"):
+                    with st.form(f"stage_form_{rec.id}"):
+                        stage_kind = st.selectbox(
+                            "Stage",
+                            [k for _, k in QUICK_ACTIONS],
+                            key=f"stage_kind_{rec.id}",
+                        )
+                        stage_date = st.date_input("When", key=f"stage_date_{rec.id}")
+                        at_pipeline = st.selectbox(
+                            "If terminal (rejected/withdrew/ghosted): at which pipeline stage?",
+                            ["(none)"] + list(
+                                __import__("db.models", fromlist=["PIPELINE_STAGES"]).PIPELINE_STAGES
+                            ),
+                            key=f"stage_at_{rec.id}",
+                        )
+                        stage_notes = st.text_area(
+                            "Notes / feedback",
+                            placeholder="Verbatim feedback, offer details, why it stalled, etc.",
+                            key=f"stage_notes_{rec.id}",
+                        )
+                        if st.form_submit_button("Add stage", type="primary"):
+                            try:
+                                add_stage(
+                                    st.session_state.user_id,
+                                    rec.id,
+                                    kind=stage_kind,
+                                    occurred_on=stage_date,
+                                    notes=stage_notes or None,
+                                    at_pipeline_stage=(
+                                        None if at_pipeline == "(none)" else at_pipeline
+                                    ),
+                                )
+                                st.success("Stage added.")
+                                st.rerun()
+                            except StageError as exc:
+                                st.error(str(exc))
+
                 report = rec.analysis_json.get("final_report")
                 if report:
                     with st.expander("📑 Saved report"):
@@ -586,3 +668,109 @@ with applications_tab:
 
         if records and not visible:
             st.info("No saved applications match the current filter.")
+
+
+# ---------------------------------------------------------------------------
+# Analytics tab
+# ---------------------------------------------------------------------------
+
+with analytics_tab:
+    dash = compute_dashboard(st.session_state.user_id)
+    o = dash.overview
+
+    if o.total_applications == 0:
+        st.markdown(
+            """
+            ### 📊 Nothing to chart yet
+
+            Analytics light up as you save applications and add stage events
+            (Applied → screens → interviews → offer/reject). The funnel,
+            conversion rates, time-in-stage averages, and verdict-vs-outcome
+            correlations all derive from those stage events — the more you
+            log, the more useful this page gets.
+            """
+        )
+    else:
+        st.subheader("Overview")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total applications", o.total_applications)
+        m2.metric("Active", o.active)
+        m3.metric("In interview", o.in_interview)
+        m4.metric("Offers received", o.offers_received)
+        m5, m6, m7, m8 = st.columns(4)
+        m5.metric("Offers accepted", o.offers_accepted)
+        m6.metric("Rejected", o.rejected)
+        m7.metric("Ghosted", o.ghosted)
+        m8.metric(
+            "Rejection rate",
+            f"{int(round(o.rejection_rate * 100))}%" if (o.rejected + o.offers_received) else "—",
+            help="Rejected / (rejected + offers received) — among applications that reached a decision.",
+        )
+
+        # ----- Funnel -----
+        st.subheader("Pipeline funnel")
+        funnel_data = {row.stage: row.reached for row in dash.funnel if row.reached}
+        if funnel_data:
+            st.bar_chart(funnel_data, horizontal=True)
+            conv_rows = [
+                {"stage": row.stage,
+                 "conversion from previous":
+                     f"{int(round((row.conversion_from_previous or 0) * 100))}%"
+                     if row.conversion_from_previous is not None else "—"}
+                for row in dash.funnel if row.reached
+            ]
+            with st.expander("Stage-over-stage conversion"):
+                st.table(conv_rows)
+        else:
+            st.caption("_No pipeline events yet — add stages on the applications tab._")
+
+        # ----- Time in stage -----
+        st.subheader("Average days between stages")
+        if dash.time_in_stage:
+            tis_data = {
+                f"{t.from_stage} → {t.to_stage}": t.average_days
+                for t in dash.time_in_stage
+            }
+            st.bar_chart(tis_data, horizontal=True)
+            st.caption(
+                "Sample sizes — "
+                + ", ".join(
+                    f"{t.from_stage}→{t.to_stage}: n={t.samples}"
+                    for t in dash.time_in_stage
+                )
+            )
+        else:
+            st.caption("_Need at least one app with two consecutive pipeline stages dated._")
+
+        # ----- Verdict outcomes -----
+        st.subheader("Does the analyzer's verdict predict outcomes?")
+        if dash.verdict_outcomes:
+            st.dataframe(
+                [
+                    {
+                        "Verdict": v.verdict,
+                        "Applications": v.applications,
+                        "Reached offer": v.reached_offer,
+                        "Rejected": v.rejected,
+                        "Offer rate": f"{int(round(v.offer_rate * 100))}%",
+                    }
+                    for v in dash.verdict_outcomes
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+            st.caption(
+                "Correlation isn't causation — but a consistent gap between "
+                "Recommended-verdict offer-rate and Not-Recommended offer-rate "
+                "is a signal the verdict is actually picking up something real."
+            )
+
+        # ----- Rejection stage distribution -----
+        if dash.rejection_stage_distribution:
+            st.subheader("Where do rejections happen?")
+            st.bar_chart(dash.rejection_stage_distribution, horizontal=True)
+
+        # ----- Volume over time -----
+        if dash.volume_by_week:
+            st.subheader("Applications saved per week")
+            st.line_chart(dash.volume_by_week)

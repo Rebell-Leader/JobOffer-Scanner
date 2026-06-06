@@ -8,12 +8,13 @@ new LLM call.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
     JSON,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -109,6 +110,11 @@ class Application(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="applications")
+    stages: Mapped[list["ApplicationStage"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="ApplicationStage.occurred_on, ApplicationStage.id",
+    )
 
     __table_args__ = (
         # Quick "my applications, newest first" filter.
@@ -116,3 +122,52 @@ class Application(Base):
         # We don't enforce uniqueness on (user, company, title) — a user may
         # re-analyze the same posting and we want both records.
     )
+
+
+# Canonical pipeline stages. Order here = funnel order for analytics. The
+# terminal stages (rejected/withdrew/ghosted) close an application but don't
+# advance the funnel; ``offer_accepted`` is the success terminal.
+PIPELINE_STAGES = (
+    "applied",
+    "recruiter_screen",
+    "phone_screen",
+    "technical_interview",
+    "take_home",
+    "onsite",
+    "offer_received",
+    "offer_accepted",
+)
+TERMINAL_NEGATIVE_STAGES = ("rejected", "withdrew", "ghosted")
+ALL_STAGE_KINDS = PIPELINE_STAGES + TERMINAL_NEGATIVE_STAGES
+
+
+class ApplicationStage(Base):
+    """One milestone in an application's lifecycle.
+
+    Each row is an *event that happened*: ``applied`` on a date, ``phone_screen``
+    on another, ``rejected`` on another. Multiple events of the same kind are
+    fine (e.g. several technical interviews) — sort order is by ``occurred_on``.
+    """
+
+    __tablename__ = "application_stages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # For terminal stages (rejected/withdrew/ghosted): which pipeline stage was
+    # the application in when it ended? Useful for "rejected after onsite" stats.
+    at_pipeline_stage: Mapped[Optional[str]] = mapped_column(String(32))
+
+    # Optional structured payload — captures, e.g., a verbatim recruiter
+    # feedback quote, the offer compensation, or a rejection reason — without
+    # forcing a single rigid shape across stages.
+    extra: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    application: Mapped["Application"] = relationship(back_populates="stages")
