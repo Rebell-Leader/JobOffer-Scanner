@@ -96,6 +96,28 @@ returns sample data — never silently. See `.env.example`.
   User-scoped: one account never sees another's rows.
 - ✅ 68 unit tests total (9 new for Phase 5).
 
+### Phase 23–27 (shipped) — integrations, federated auth, hardening, extension
+- ✅ **Phase 23** — outbound **webhooks** (HMAC-signed POSTs on `stage.added`
+  / `application.saved` / `verdict.changed`), delivery log + redelivery,
+  background dispatch so the UI never blocks on a receiver.
+- ✅ **Phase 24** — **OAuth login** (Google / GitHub) over the auth-code flow;
+  identity resolution links by email, creates OAuth users with unusable
+  passwords; CSRF-state-verified callback.
+- ✅ **Phase 25** — **security headers**: pure-ASGI middleware adds CSP /
+  X-Frame-Options / Referrer-Policy / opt-in HSTS to every API response
+  (incl. errors); Streamlit XSRF pinned on; `deploy/Caddyfile.example` +
+  `deploy/nginx.conf.example` add web-UI CSP/HSTS + Secure cookies.
+- ✅ **Phase 26** — **Postgres-tested migrations in CI**: a service-container
+  job runs `alembic upgrade head → downgrade base → upgrade head` on real
+  Postgres and asserts all 15 tables exist (SQLite's permissive DDL hid this
+  class of bug).
+- ✅ **Phase 27** — **Chrome extension** (MV3) that reads the rendered job
+  page and calls `/v1/analyze` with the user's API token — works on JS-heavy
+  boards the server can't fetch. Pure helpers unit-tested in Node.
+- ✅ **Deployment**: `REPLIT_DEPLOYMENT.md` analyses Replit compatibility;
+  `uv.lock` regenerated to match `pyproject.toml` (the stale lock would have
+  crashed the Replit boot). 462 tests total (Python) + 9 JS helper tests.
+
 ### Phase 19–22 (shipped) — async UX, hardened auth, sharing, public API
 - ✅ **Phase 19** — **background analyses** via Celery survive container
   restarts and cross-session resume. `@st.fragment(run_every="5s")` card
