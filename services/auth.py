@@ -50,6 +50,7 @@ class AuthedUser:
     id: int
     email: str
     two_factor_required: bool = False
+    email_verified: bool = True
 
 
 def _normalize_email(email: str) -> str:
@@ -88,7 +89,7 @@ def register_user(email: str, password: str) -> AuthedUser:
         session.commit()
         session.refresh(user)
         _audit("user.register", user_id=user.id, details={"email": email})
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
 def authenticate_user(email: str, password: str) -> AuthedUser:
@@ -125,9 +126,10 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
             )
             return AuthedUser(
                 id=user.id, email=user.email, two_factor_required=True,
+                email_verified=user.email_verified,
             )
         _audit("user.login.success", user_id=user.id, details={"email": email})
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
 def create_oauth_user(email: str) -> AuthedUser:
@@ -144,19 +146,29 @@ def create_oauth_user(email: str) -> AuthedUser:
     with get_session() as session:
         existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
-            return AuthedUser(id=existing.id, email=existing.email)
-        user = User(email=email, password_hash=_hash_password(secrets.token_urlsafe(32)))
+            return AuthedUser(id=existing.id, email=existing.email,
+                              email_verified=existing.email_verified)
+        # OAuth users are verified by construction — the provider verified the
+        # email before returning it to us.
+        user = User(
+            email=email,
+            password_hash=_hash_password(secrets.token_urlsafe(32)),
+            email_verified=True,
+        )
         session.add(user)
         session.commit()
         session.refresh(user)
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=True)
 
 
 def find_user_by_email(email: str) -> Optional[AuthedUser]:
     email = _normalize_email(email)
     with get_session() as session:
         user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
-        return AuthedUser(id=user.id, email=user.email) if user else None
+        return (
+            AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
+            if user else None
+        )
 
 
 def delete_account(user_id: int, password: str) -> None:
@@ -185,7 +197,7 @@ def get_user(user_id: int) -> Optional[AuthedUser]:
         user = session.get(User, user_id)
         if user is None:
             return None
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
 def change_password(user_id: int, current_password: str, new_password: str) -> None:

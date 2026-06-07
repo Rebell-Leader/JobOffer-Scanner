@@ -356,7 +356,16 @@ def render_auth() -> None:
                     user = register_user(email, password)
                     st.session_state.user_id = user.id
                     st.session_state.user_email = user.email
-                    st.success("Account created. Signing you in...")
+                    # Kick off email verification (best-effort delivery).
+                    try:
+                        from services.email_verify import start_verification
+                        from services.notifications import send_verification_email
+                        tok = start_verification(user.id)
+                        if tok is not None:
+                            send_verification_email(user.email, tok)
+                    except Exception:  # noqa: BLE001 - never block signup
+                        pass
+                    st.success("Account created. Check your email to verify it.")
                     st.rerun()
                 except RateLimitExceeded as exc:
                     st.error(str(exc))
@@ -404,6 +413,73 @@ def render_auth() -> None:
 if "user_id" not in st.session_state:
     render_auth()
     st.stop()
+
+
+# ---------------------------------------------------------------------------
+# Email-verification gate / banner
+# ---------------------------------------------------------------------------
+
+def _render_verification_gate() -> None:
+    """Show a verify-your-email banner for unverified accounts.
+
+    Always informational; when REQUIRE_EMAIL_VERIFICATION=1 it hard-blocks the
+    app (st.stop) until the user verifies — otherwise it's a dismissible-by-
+    verifying banner that doesn't impede usage (so the live deploy isn't
+    broken for existing/unverified users).
+    """
+    from services.email_verify import (
+        EmailVerifyError,
+        complete_verification,
+        is_verified,
+        start_verification,
+    )
+
+    if is_verified(st.session_state.user_id):
+        return
+
+    hard_gate = os.getenv("REQUIRE_EMAIL_VERIFICATION") == "1"
+    box = st.warning if hard_gate else st.info
+    box(
+        "📧 Please verify your email"
+        + (" to use the app." if hard_gate else " — check your inbox for the link.")
+    )
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        if st.button("Resend email"):
+            try:
+                from services.notifications import send_verification_email
+                tok = start_verification(st.session_state.user_id)
+                if tok is not None:
+                    send_verification_email(st.session_state.user_email, tok)
+                st.success("Verification email sent.")
+            except (EmailVerifyError, RateLimitExceeded) as exc:
+                st.error(str(exc))
+    with col_b:
+        with st.form("verify_email_form"):
+            code = st.text_input("Verification token", key="verify_token_input")
+            if st.form_submit_button("Verify"):
+                try:
+                    complete_verification(st.session_state.user_email, code)
+                    st.success("Email verified. Thank you!")
+                    st.rerun()
+                except EmailVerifyError as exc:
+                    st.error(str(exc))
+    if hard_gate:
+        st.stop()
+
+
+# Consume a ?verify_token= deep link (from the emailed link) before rendering.
+_vt = st.query_params.get("verify_token")
+if _vt:
+    from services.email_verify import EmailVerifyError as _EVErr, complete_verification as _cv
+    try:
+        _cv(st.session_state.user_email, _vt)
+        st.success("Email verified. Thank you!")
+    except _EVErr as exc:
+        st.error(str(exc))
+    st.query_params.pop("verify_token", None)
+
+_render_verification_gate()
 
 
 # ---------------------------------------------------------------------------

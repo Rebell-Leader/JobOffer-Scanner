@@ -50,6 +50,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # New password signups start unverified (ORM default False). The migration
+    # backfills existing rows to True (server_default) so no one is locked out,
+    # and OAuth-created users are set True explicitly (provider verified email).
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     applications: Mapped[list["Application"]] = relationship(
@@ -117,6 +121,25 @@ class UserTwoFactor(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="two_factor")
+
+
+class EmailVerificationToken(Base):
+    """Short-lived email-verification token (bcrypt-hashed, like reset tokens).
+
+    Created on signup; the user clicks the emailed link / pastes the token to
+    mark their account ``email_verified``. One-shot via ``used_at``.
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class OAuthIdentity(Base):
