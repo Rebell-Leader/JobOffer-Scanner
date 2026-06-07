@@ -35,7 +35,6 @@ from services.applications import (
 from services.auth import get_user
 from services.master_cv import MasterCVError, get_master_cv, save_master_cv
 
-
 router = APIRouter(prefix="/v1")
 
 

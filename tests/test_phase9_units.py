@@ -97,10 +97,11 @@ class MasterCVTests(unittest.TestCase):
         self.assertEqual(get_master_cv(self.user.id).structured, {})
 
     def test_one_master_cv_per_user(self):
+        from sqlalchemy import select
+
         from db.models import MasterCV
         from db.session import get_session
         from services.master_cv import save_master_cv
-        from sqlalchemy import select
 
         save_master_cv(self.user.id, SAMPLE_CV)
         save_master_cv(self.user.id, SAMPLE_CV + "\nMore")  # overwrites
@@ -190,7 +191,11 @@ class ProjectTests(unittest.TestCase):
 
     def test_cross_user_isolation(self):
         from services.projects import (
-            ProjectError, create_project, delete_project, list_projects, update_project,
+            ProjectError,
+            create_project,
+            delete_project,
+            list_projects,
+            update_project,
         )
 
         p = create_project(self.user.id, title="mine")
@@ -238,7 +243,6 @@ class TailoringTests(unittest.TestCase):
     def test_tailored_cv_prompt_contains_constraints(self):
         """The no-fabrication rules MUST appear verbatim in the generated prompt."""
         from services.tailoring import (
-            NO_FABRICATION_RULES,
             build_tailored_cv_prompt,
         )
 

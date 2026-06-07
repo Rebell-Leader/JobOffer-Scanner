@@ -6,9 +6,71 @@ on:
   pull_request:
     branches: [main]
 
+# Opt JS-based actions (checkout, setup-python) into the Node 24 runtime so the
+# Node 20 deprecation warnings go away ahead of the forced cutover.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
+  lint:
+    name: ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff>=0.6
+      - run: ruff check .
+
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps + type stubs
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[telegram,worker,dev]"
+      - run: mypy
+
+  security:
+    name: bandit + pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "bandit>=1.7" "pip-audit>=2.7"
+      # bandit is a hard gate (we keep it clean at medium+high severity).
+      # Explicit -x (rather than pyproject config) avoids needing bandit[toml].
+      - run: bandit -r . -ll -x ./tests,./migrations,./.venv
+      # pip-audit is ADVISORY: transitive-dep CVEs are often outside our
+      # control (base-image setuptools/wheel, etc.), so it informs without
+      # blocking the build.
+      - name: pip-audit (advisory)
+        continue-on-error: true
+        run: pip-audit --progress-spinner off || true
+
+  js-tests:
+    name: chrome-extension JS tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node chrome-extension/extract.test.mjs
+
   test:
-    name: unittest (Python ${{ matrix.python-version }})
+    name: unittest + coverage (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -26,13 +88,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Telegram extra so the bot-handler tests can run.
-          pip install -e ".[telegram]"
+          # Telegram extra so the bot-handler tests can run; dev extra for coverage.
+          pip install -e ".[telegram,dev]"
 
-      - name: Show installed package versions
-        run: pip freeze | sort
-
-      - name: Run unit tests
+      - name: Run unit tests under coverage
         # Strip any provider keys the CI environment may inject so the demo
         # smoke test exercises the no-key path deterministically.
         env:
@@ -40,7 +99,15 @@ jobs:
           OPENAI_API_KEY: ""
           FEATHERLESS_API_KEY: ""
           LLM_PROVIDER: ""
-        run: python -m unittest discover -s tests -v
+        run: coverage run -m unittest discover -s tests
+
+      - name: Enforce coverage floor on the logic packages
+        # app.py (the dense Streamlit UI) is only smoke-tested, so the gate is
+        # on the service/logic packages where coverage is meaningful (~87%).
+        run: |
+          coverage report \
+            --include="services/*,utils/*,db/*,tools/*,agents/*,api/*,bot/*,worker/*" \
+            --fail-under=80
 
   migrations-postgres:
     name: alembic up/down/up on Postgres
@@ -101,6 +168,7 @@ jobs:
               "telegram_links", "audit_events", "background_analyses",
               "user_two_factor", "application_shares", "api_tokens",
               "webhooks", "webhook_deliveries", "oauth_identities",
+              "email_verification_tokens",
           }
           missing = required - tables
           assert not missing, f"missing tables after migrate: {missing}"

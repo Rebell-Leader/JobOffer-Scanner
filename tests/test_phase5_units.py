@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import subprocess
@@ -174,6 +173,7 @@ class AlembicMigrationTests(unittest.TestCase):
 
     def test_upgrade_creates_expected_tables(self):
         import tempfile
+
         from sqlalchemy import create_engine, inspect
 
         project_root = Path(__file__).resolve().parents[1]

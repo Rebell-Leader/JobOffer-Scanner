@@ -69,10 +69,11 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(str(ctx_unknown.exception), str(ctx_badpw.exception))
 
     def test_password_not_stored_in_plaintext(self):
+        from sqlalchemy import select
+
         from db.models import User
         from db.session import get_session
         from services.auth import register_user
-        from sqlalchemy import select
 
         register_user("c@x.com", "longenough")
         with get_session() as s:

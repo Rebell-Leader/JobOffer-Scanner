@@ -13,17 +13,18 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
-    BigInteger as sa_BigInt,
     Boolean,
-    Column,
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
-    Index,
+)
+from sqlalchemy import (
+    BigInteger as sa_BigInt,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 

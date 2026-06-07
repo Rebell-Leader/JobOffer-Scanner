@@ -19,17 +19,21 @@ from services.applications import (
     save_analysis,
     update_status,
 )
+from services.auth import (
+    AuthError,
+    authenticate_user,
+    change_password,
+    complete_password_reset,
+    register_user,
+    request_password_reset,
+)
 from services.background_analysis import (
     BackgroundAnalysisError,
-    delete as delete_background_analysis,
-    list_for_user as list_background_analyses,
     refresh_all_pending,
     submit_background_analysis,
 )
-from services.checkpoint import (
-    CHECKPOINT_STAGES,
-    compute_key as compute_checkpoint_key,
-    get_store as get_checkpoint_store,
+from services.background_analysis import (
+    delete as delete_background_analysis,
 )
 from services.bulk_import import (
     BulkImportError,
@@ -40,6 +44,14 @@ from services.bulk_import import (
     save_applications,
     save_projects,
 )
+from services.checkpoint import (
+    compute_key as compute_checkpoint_key,
+)
+from services.checkpoint import (
+    get_store as get_checkpoint_store,
+)
+from services.constraint_check import ConstraintCheck
+from services.constraint_check import summarize as summarize_check
 from services.master_cv import (
     MasterCVError,
     delete_master_cv,
@@ -52,12 +64,23 @@ from services.master_cv import (
     save_master_cv,
     save_master_cv_from_upload,
 )
+from services.notifications import (
+    notify_stage_added,
+    send_password_reset_email,
+)
+from services.pdf_export import PDFExportError, markdown_to_pdf
 from services.projects import (
     ProjectError,
     create_project,
     delete_project,
     list_projects,
     update_project,
+)
+from services.rate_limit import RateLimitExceeded
+from services.reminders import (
+    set_inactive_threshold,
+    snooze_application,
+    unsnooze_application,
 )
 from services.stages import (
     QUICK_ACTIONS,
@@ -66,8 +89,6 @@ from services.stages import (
     delete_stage,
     list_stages,
 )
-from services.constraint_check import ConstraintCheck, summarize as summarize_check
-from services.pdf_export import PDFExportError, markdown_to_pdf
 from services.suggestions import (
     apply_skill_addition,
     build_suggestions,
@@ -81,43 +102,6 @@ from services.tailoring import (
     list_artifacts,
     recheck_artifact,
 )
-from services.auth import (
-    AuthError,
-    authenticate_user,
-    change_password,
-    complete_password_reset,
-    register_user,
-    request_password_reset,
-)
-from services.notifications import (
-    notify_stage_added,
-    send_password_reset_email,
-)
-from services.webhooks import (
-    WebhookError,
-    delete_webhook,
-    dispatch_event_background,
-    list_deliveries as list_webhook_deliveries,
-    list_webhooks,
-    register_webhook,
-    set_active as set_webhook_active,
-)
-from services.totp import (
-    TOTPError,
-    confirm_setup as totp_confirm_setup,
-    disable as totp_disable,
-    is_enabled as totp_is_enabled,
-    pending_setup as totp_pending_setup,
-    remaining_backup_codes as totp_backup_codes_left,
-    start_setup as totp_start_setup,
-    verify_login as totp_verify_login,
-)
-from services.rate_limit import RateLimitExceeded
-from services.reminders import (
-    set_inactive_threshold,
-    snooze_application,
-    unsnooze_application,
-)
 from services.telegram_link import (
     TelegramLinkError,
     get_link,
@@ -125,14 +109,48 @@ from services.telegram_link import (
     set_notify_on_stage,
     unlink,
 )
-from tools.resume_tools import extract_resume_text
-from tools.url_ingest import fetch_job_posting, is_url
 from services.timeline import (
     STAGE_COLORS,
     cross_application_swimlane,
     per_application_timeline,
     points_to_records,
 )
+from services.totp import (
+    TOTPError,
+)
+from services.totp import (
+    confirm_setup as totp_confirm_setup,
+)
+from services.totp import (
+    disable as totp_disable,
+)
+from services.totp import (
+    is_enabled as totp_is_enabled,
+)
+from services.totp import (
+    remaining_backup_codes as totp_backup_codes_left,
+)
+from services.totp import (
+    start_setup as totp_start_setup,
+)
+from services.totp import (
+    verify_login as totp_verify_login,
+)
+from services.webhooks import (
+    WebhookError,
+    delete_webhook,
+    dispatch_event_background,
+    list_webhooks,
+    register_webhook,
+)
+from services.webhooks import (
+    list_deliveries as list_webhook_deliveries,
+)
+from services.webhooks import (
+    set_active as set_webhook_active,
+)
+from tools.resume_tools import extract_resume_text
+from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
 from utils.logging_setup import configure as configure_logging
@@ -471,7 +489,8 @@ def _render_verification_gate() -> None:
 # Consume a ?verify_token= deep link (from the emailed link) before rendering.
 _vt = st.query_params.get("verify_token")
 if _vt:
-    from services.email_verify import EmailVerifyError as _EVErr, complete_verification as _cv
+    from services.email_verify import EmailVerifyError as _EVErr
+    from services.email_verify import complete_verification as _cv
     try:
         _cv(st.session_state.user_email, _vt)
         st.success("Email verified. Thank you!")
@@ -502,8 +521,14 @@ with st.sidebar.expander("📜 My recent activity"):
 with st.sidebar.expander("🔑 API tokens"):
     from services.api_tokens import (
         ApiTokenError,
+    )
+    from services.api_tokens import (
         issue as issue_api_token,
+    )
+    from services.api_tokens import (
         list_for_user as list_api_tokens,
+    )
+    from services.api_tokens import (
         revoke as revoke_api_token,
     )
     st.caption(
@@ -643,6 +668,7 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
         else:
             try:
                 import io
+
                 import qrcode
 
                 img = qrcode.make(st.session_state.totp_setup_uri)
@@ -684,7 +710,8 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
 
 with st.sidebar.expander("🗄 Privacy & account"):
     from services.account_export import export_json
-    from services.auth import AuthError as _AuthError, delete_account
+    from services.auth import AuthError as _AuthError
+    from services.auth import delete_account
 
     st.caption("Download everything we hold about you, or delete your account.")
     st.download_button(
@@ -1845,6 +1872,8 @@ with applications_tab:
                     ShareError,
                     create_share,
                     list_shares_for_application,
+                )
+                from services.sharing import (
                     revoke as revoke_share,
                 )
                 if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):

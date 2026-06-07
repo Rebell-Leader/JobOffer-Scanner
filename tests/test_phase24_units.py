@@ -84,10 +84,11 @@ class ResolveIdentityTests(unittest.TestCase):
         _fresh_db()
 
     def test_new_identity_creates_user_and_links(self):
+        from sqlalchemy import select
+
         from db.models import OAuthIdentity, User
         from db.session import get_session
         from services.oauth import resolve_identity
-        from sqlalchemy import select
 
         user = resolve_identity("google", "sub-123", "new@example.com")
         self.assertEqual(user.email, "new@example.com")
@@ -107,11 +108,12 @@ class ResolveIdentityTests(unittest.TestCase):
         self.assertEqual(u1.id, u2.id)
 
     def test_email_match_links_new_identity_to_existing_user(self):
+        from sqlalchemy import select
+
         from db.models import OAuthIdentity
         from db.session import get_session
         from services.auth import register_user
         from services.oauth import resolve_identity
-        from sqlalchemy import select
 
         existing = register_user("shared@example.com", "longenough")
         # OAuth login with a DIFFERENT provider id but the same email links.

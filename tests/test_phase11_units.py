@@ -8,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -210,6 +209,7 @@ class MasterCVRevisionTests(unittest.TestCase):
 
     def test_revisions_newest_first(self):
         import time
+
         from services.master_cv import list_revisions, save_master_cv
 
         save_master_cv(self.user.id, "v1")

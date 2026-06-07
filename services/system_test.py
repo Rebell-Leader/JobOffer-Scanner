@@ -13,9 +13,8 @@ from __future__ import annotations
 import os
 import smtplib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
-
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -50,6 +49,7 @@ def _probe_database() -> TestResult:
     t0 = time.time()
     try:
         from sqlalchemy import text as sa_text
+
         from db.session import get_session
         session = get_session()
         session.execute(sa_text("SELECT 1"))

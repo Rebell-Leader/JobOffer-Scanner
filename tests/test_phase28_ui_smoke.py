@@ -172,8 +172,8 @@ class AppRenderSmokeTests(unittest.TestCase):
     def test_share_view_renders_without_error(self):
         """The public ?share= view (renders before the auth gate) must work."""
         user = _seed_dense_account()
-        from services.sharing import list_shares_for_application
         from services.applications import list_applications
+        from services.sharing import list_shares_for_application
 
         app_id = list_applications(user.id)[0].id
         token = list_shares_for_application(user.id, app_id)[0].token

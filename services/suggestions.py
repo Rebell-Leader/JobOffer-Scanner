@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from services.constraint_check import ConstraintCheck
 from services.master_cv import MasterCVError, get_master_cv, save_master_cv

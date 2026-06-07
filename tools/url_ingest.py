@@ -31,7 +31,9 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
 def is_url(text: Optional[str]) -> bool:
-    return bool(text) and bool(_URL_RE.match(text.strip()))
+    if not text:
+        return False
+    return bool(_URL_RE.match(text.strip()))
 
 
 def fetch_job_posting(url: str) -> str:

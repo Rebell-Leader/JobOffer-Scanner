@@ -74,7 +74,9 @@ class VerificationFlowTests(unittest.TestCase):
 
     def test_token_is_one_shot(self):
         from services.email_verify import (
-            EmailVerifyError, complete_verification, start_verification,
+            EmailVerifyError,
+            complete_verification,
+            start_verification,
         )
 
         tok = start_verification(self.user.id)
@@ -88,7 +90,11 @@ class VerificationFlowTests(unittest.TestCase):
             complete_verification("o@x.com", tok)
 
     def test_wrong_token_rejected(self):
-        from services.email_verify import EmailVerifyError, complete_verification, start_verification
+        from services.email_verify import (
+            EmailVerifyError,
+            complete_verification,
+            start_verification,
+        )
 
         start_verification(self.user.id)
         with self.assertRaises(EmailVerifyError):
@@ -96,10 +102,13 @@ class VerificationFlowTests(unittest.TestCase):
 
     def test_expired_token_rejected(self):
         from sqlalchemy import select
+
         from db.models import EmailVerificationToken
         from db.session import get_session
         from services.email_verify import (
-            EmailVerifyError, complete_verification, start_verification,
+            EmailVerifyError,
+            complete_verification,
+            start_verification,
         )
 
         tok = start_verification(self.user.id)
@@ -118,6 +127,7 @@ class VerificationFlowTests(unittest.TestCase):
 
     def test_token_hash_not_raw(self):
         from sqlalchemy import select
+
         from db.models import EmailVerificationToken
         from db.session import get_session
         from services.email_verify import start_verification

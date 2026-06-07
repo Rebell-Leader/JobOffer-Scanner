@@ -24,12 +24,11 @@ import csv
 import io
 import json
 import re
-from dataclasses import dataclass
 from datetime import date as date_cls
 from datetime import datetime
 from typing import List, Optional
 
-from db.models import ALL_STAGE_KINDS, APPLICATION_STATUSES
+from db.models import APPLICATION_STATUSES
 from services.applications import save_analysis
 from services.projects import ProjectRecord, create_project
 from services.stages import add_stage

@@ -14,7 +14,6 @@ import logging
 from typing import Callable, Optional
 
 from services.rate_limit import ANALYSIS_LIMITER, RateLimitExceeded
-from worker.tasks import analyze_payload
 
 logger = logging.getLogger(__name__)
 

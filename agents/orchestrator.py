@@ -11,7 +11,6 @@ from agents import (
     salary_analyzer,
 )
 from services.checkpoint import (
-    CHECKPOINT_STAGES,
     CheckpointPayload,
     get_store,
 )

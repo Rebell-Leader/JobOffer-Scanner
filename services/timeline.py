@@ -17,7 +17,6 @@ Two builders:
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date as date_cls
 from typing import Dict, List, Optional
@@ -25,14 +24,11 @@ from typing import Dict, List, Optional
 from sqlalchemy import asc, select
 
 from db.models import (
-    ALL_STAGE_KINDS,
     PIPELINE_STAGES,
-    TERMINAL_NEGATIVE_STAGES,
     Application,
     ApplicationStage,
 )
 from db.session import get_session
-
 
 # Color hexes chosen to read on both light and dark Streamlit themes.
 # Pipeline stages: cooler -> warmer as the user advances; terminals stand out.

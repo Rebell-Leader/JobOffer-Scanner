@@ -19,8 +19,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Iterable, List, Optional, Tuple
-
+from typing import Deque, Dict, List, Optional, Tuple
 
 # How many samples each histogram remembers. Bounded so a hot path doesn't
 # eat memory; older samples drop off in FIFO order.

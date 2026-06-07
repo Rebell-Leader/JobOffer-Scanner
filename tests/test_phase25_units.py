@@ -65,6 +65,7 @@ class SecurityHeaderIntegrationTests(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
+
         from api.main import create_app
         return TestClient(create_app())
 

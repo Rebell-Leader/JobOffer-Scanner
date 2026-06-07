@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import desc, select
 
 from db.models import (
     ARTIFACT_KINDS,
@@ -26,11 +26,10 @@ from db.models import (
 )
 from db.session import get_session
 from services.constraint_check import ConstraintCheck, check_tailored_output
-from services.master_cv import MasterCVError, get_master_cv
+from services.master_cv import get_master_cv
 from services.projects import projects_as_text
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
-
 
 # Canonical cover-letter tone presets surfaced in the UI.
 COVER_LETTER_TONES = (

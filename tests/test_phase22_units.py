@@ -69,6 +69,7 @@ class ApiTokenIssueTests(unittest.TestCase):
 
     def test_list_newest_first(self):
         import time
+
         from services.api_tokens import issue, list_for_user
 
         issue(self.user.id, "a")
@@ -125,8 +126,7 @@ class ApiTokenVerifyTests(unittest.TestCase):
         self.assertIsNone(verify("   "))
 
     def test_verify_rejects_revoked(self):
-        from services.api_tokens import revoke, verify
-        from services.api_tokens import list_for_user
+        from services.api_tokens import list_for_user, revoke, verify
 
         token_id = list_for_user(self.user.id)[0].id
         revoke(self.user.id, token_id)
@@ -174,6 +174,7 @@ class ApiEndpointTests(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
+
         from api.main import create_app
 
         return TestClient(create_app())

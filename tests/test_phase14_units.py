@@ -171,8 +171,9 @@ class MasterCVPdfTests(unittest.TestCase):
         out = markdown_to_pdf(plain, title="Master CV")
         self.assertEqual(bytes(out[:5]), b"%PDF-")
         # Spot-check that the content survived to the PDF via pypdf extraction.
-        from pypdf import PdfReader
         import io
+
+        from pypdf import PdfReader
         text = PdfReader(io.BytesIO(out)).pages[0].extract_text()
         for needle in ("Jane Doe", "Python", "Acme"):
             self.assertIn(needle, text)

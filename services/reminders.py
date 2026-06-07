@@ -22,17 +22,16 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, select
 
 from db.models import (
     TERMINAL_NEGATIVE_STAGES,
     Application,
     ApplicationStage,
     TelegramLink,
-    User,
 )
 from db.session import get_session
 from services.telegram_link import send_to_chat

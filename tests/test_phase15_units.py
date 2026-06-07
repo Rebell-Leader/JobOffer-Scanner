@@ -82,6 +82,8 @@ class TelegramBindingTests(unittest.TestCase):
             complete_binding(chat_id=2, raw_token=token)  # already used
 
     def test_expired_token_rejected(self):
+        from sqlalchemy import select
+
         from db.models import TelegramLinkBindingToken
         from db.session import get_session
         from services.telegram_link import (
@@ -89,7 +91,6 @@ class TelegramBindingTests(unittest.TestCase):
             complete_binding,
             issue_binding_token,
         )
-        from sqlalchemy import select
 
         token = issue_binding_token(self.user.id)
         # Manually expire.
@@ -101,10 +102,11 @@ class TelegramBindingTests(unittest.TestCase):
             complete_binding(chat_id=1, raw_token=token)
 
     def test_raw_token_is_not_persisted(self):
+        from sqlalchemy import select
+
         from db.models import TelegramLinkBindingToken
         from db.session import get_session
         from services.telegram_link import issue_binding_token
-        from sqlalchemy import select
 
         token = issue_binding_token(self.user.id)
         with get_session() as s:

@@ -2,7 +2,7 @@
 import os
 from typing import Dict, List, Union
 
-from utils.llm import get_active_provider, is_demo_mode, TIER_MODELS
+from utils.llm import TIER_MODELS, get_active_provider, is_demo_mode
 
 
 def check_environment_setup() -> Dict[str, Union[bool, str, None]]:

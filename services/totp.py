@@ -35,8 +35,7 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 import bcrypt
 import pyotp

@@ -19,7 +19,7 @@ from datetime import date as date_cls
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, select
 
 from db.models import (
     ALL_STAGE_KINDS,

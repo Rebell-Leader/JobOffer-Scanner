@@ -21,7 +21,7 @@ def analyze(state: Dict) -> Dict:
 
     job_details = state.get("job_details") or {}
     requirements = job_details.get("requirements_analysis") or {}
-    required_skills = []
+    required_skills: list = []
     if isinstance(requirements, dict):
         required_skills = (
             requirements.get("technical_skills")

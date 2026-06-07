@@ -47,10 +47,12 @@ def send_email(to: str, subject: str, body: str) -> bool:
         return False
 
     msg = build_message(to, subject, body)
-    host = os.getenv("SMTP_HOST")
+    # email_configured() above guarantees these are present; the "" defaults
+    # are only to satisfy the type checker (str, not str | None).
+    host = os.getenv("SMTP_HOST", "")
     port = int(os.getenv("SMTP_PORT", "587"))
-    username = os.getenv("SMTP_USERNAME")
-    password = os.getenv("SMTP_PASSWORD")
+    username = os.getenv("SMTP_USERNAME", "")
+    password = os.getenv("SMTP_PASSWORD", "")
     use_tls = os.getenv("SMTP_USE_TLS", "1") == "1"
 
     try:

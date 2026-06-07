@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -21,9 +20,10 @@ def _fresh_db():
 def _seed(user_email="u@x.com"):
     """A user with data across many child tables, to test cascade + export."""
     from datetime import date
+
+    from services.api_tokens import issue
     from services.applications import save_analysis
     from services.auth import register_user
-    from services.api_tokens import issue
     from services.master_cv import save_master_cv
     from services.projects import create_project
     from services.sharing import create_share
@@ -57,6 +57,7 @@ class SqliteForeignKeyTests(unittest.TestCase):
     def test_foreign_keys_pragma_enabled(self):
         _fresh_db()
         from sqlalchemy import text
+
         from db.session import get_session
         with get_session() as s:
             val = s.execute(text("PRAGMA foreign_keys")).scalar()
@@ -82,6 +83,7 @@ class DeleteAccountTests(unittest.TestCase):
 
     def test_delete_removes_user_and_cascades_children(self):
         from sqlalchemy import text
+
         from db.session import get_session
         from services.auth import delete_account, get_user
 

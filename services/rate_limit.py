@@ -23,7 +23,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict
 
 logger = logging.getLogger(__name__)
 

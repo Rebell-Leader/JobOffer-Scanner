@@ -8,7 +8,6 @@ canonical identifier; we normalize to lowercase so "Alice@x.com" and
 from __future__ import annotations
 
 import logging
-import os
 import re
 import secrets
 from dataclasses import dataclass
