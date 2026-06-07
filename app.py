@@ -373,11 +373,13 @@ def render_auth() -> None:
                     if token is not None:
                         # Best-effort email delivery (no-op if SMTP unconfigured).
                         send_password_reset_email(forgot_email, token)
-                        # Self-hosted operator convenience.
+                        # Self-hosted operator convenience — BOTH the UI display
+                        # and the log line are gated on the same opt-in flag so a
+                        # production deploy never leaks reset tokens to stdout/logs.
                         if os.getenv("RESET_TOKEN_SURFACE_IN_UI") == "1":
                             st.code(token, language=None)
                             st.caption("RESET_TOKEN_SURFACE_IN_UI=1 — disable in production.")
-                        print(f"[auth] reset token for {forgot_email}: {token}")
+                            print(f"[auth] reset token for {forgot_email}: {token}")
                     # Always the same notice — never reveal whether the email exists.
                     st.info(_RESET_GENERIC_NOTICE)
                 except RateLimitExceeded as exc:
@@ -603,6 +605,48 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
             if st.button("I've saved them — hide"):
                 st.session_state.pop("totp_backup_codes_once", None)
                 st.rerun()
+
+with st.sidebar.expander("🗄 Privacy & account"):
+    from services.account_export import export_json
+    from services.auth import AuthError as _AuthError, delete_account
+
+    st.caption("Download everything we hold about you, or delete your account.")
+    st.download_button(
+        "⬇️ Download all my data (JSON)",
+        data=export_json(st.session_state.user_id),
+        file_name="my_joboffer_data.json",
+        mime="application/json",
+        key="account_export_btn",
+    )
+
+    st.markdown("---")
+    st.markdown("**Danger zone**")
+    if not st.session_state.get("account_delete_armed"):
+        if st.button("Delete my account…"):
+            st.session_state["account_delete_armed"] = True
+            st.rerun()
+    else:
+        st.warning(
+            "This permanently deletes your account and ALL data (applications, "
+            "CV, artifacts, tokens). This cannot be undone."
+        )
+        with st.form("delete_account_form"):
+            del_pw = st.text_input("Confirm current password", type="password")
+            col_d, col_c = st.columns(2)
+            do_delete = col_d.form_submit_button("Permanently delete", type="primary")
+            cancel = col_c.form_submit_button("Cancel")
+        if cancel:
+            st.session_state.pop("account_delete_armed", None)
+            st.rerun()
+        if do_delete:
+            try:
+                delete_account(st.session_state.user_id, del_pw)
+                # Wipe the session entirely and return to the auth gate.
+                for key in list(st.session_state.keys()):
+                    st.session_state.pop(key, None)
+                st.rerun()
+            except _AuthError as exc:
+                st.error(str(exc))
 
 with st.sidebar.expander("🔒 Change password"):
     with st.form("change_pw_form"):

@@ -15,11 +15,29 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from db.models import Base
+
+
+def _enable_sqlite_fk(engine: Engine) -> None:
+    """Turn on ``PRAGMA foreign_keys`` for SQLite connections.
+
+    SQLite ignores ``ON DELETE CASCADE`` / ``SET NULL`` unless foreign-key
+    enforcement is enabled per-connection. Without this, account deletion
+    (which relies on cascade) would orphan child rows on SQLite while working
+    on Postgres — a dev/prod behaviour split. This makes them identical.
+    """
+    if not str(engine.url).startswith("sqlite"):
+        return
+
+    @event.listens_for(engine, "connect")
+    def _set_pragma(dbapi_connection, _record):  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +64,7 @@ def get_engine() -> Engine:
         # can share the connection.
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         _engine = create_engine(url, connect_args=connect_args, future=True)
+        _enable_sqlite_fk(_engine)
         logger.info("DB engine created for %s", url.split("://", 1)[0])
     return _engine
 
@@ -94,6 +113,7 @@ def reset_engine_for_testing(url: str) -> None:
         poolclass=StaticPool,
         future=True,
     )
+    _enable_sqlite_fk(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     _initialized = False
     init_db()

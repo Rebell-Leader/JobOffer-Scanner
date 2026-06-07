@@ -541,6 +541,10 @@ AUDIT_KINDS = (
     "user.oauth.login",
     "user.oauth.register",
     "user.oauth.link",
+    "user.account.delete",
+    "user.account.export",
+    "user.email.verify.request",
+    "user.email.verify.complete",
 )
 
 

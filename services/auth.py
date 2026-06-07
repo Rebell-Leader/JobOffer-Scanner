@@ -159,6 +159,27 @@ def find_user_by_email(email: str) -> Optional[AuthedUser]:
         return AuthedUser(id=user.id, email=user.email) if user else None
 
 
+def delete_account(user_id: int, password: str) -> None:
+    """Permanently delete a user and ALL their data.
+
+    Gated by a current-password re-check. Deleting the ``User`` row cascades
+    (FK ``ondelete=CASCADE``) to applications, stages, artifacts, master CV +
+    revisions, projects, shares, webhooks, API tokens, 2FA, OAuth identities,
+    telegram link, reset tokens, and background analyses. Audit-logged before
+    deletion (the audit row's user_id is set NULL by its own
+    ``ondelete=SET NULL`` so the record survives the cascade).
+    """
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if user is None or not _verify_password(password, user.password_hash):
+            raise AuthError("Current password is incorrect.")
+        email = user.email
+        # Record the intent BEFORE the row vanishes.
+        _audit("user.account.delete", user_id=user_id, details={"email": email})
+        session.delete(user)
+        session.commit()
+
+
 def get_user(user_id: int) -> Optional[AuthedUser]:
     with get_session() as session:
         user = session.get(User, user_id)
