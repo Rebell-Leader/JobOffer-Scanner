@@ -168,9 +168,14 @@ and "production-grade for real multi-user traffic." Prioritized:
    unkeyed (dev/demo), and legacy plaintext rows re-encrypt opportunistically
    on the next successful verify. Column widened 64→255 (migration
    `5d2f8a1c4e7b`). Same primitive is reusable for OAuth-linked emails.
-7. **LLM cost controls:** token accounting + per-user budget (today's quota is
-   a request count, not spend). Cache identical analyses (the cache exists; wire
-   COL/news/LLM through it consistently).
+7. ✅ **LLM cost controls:** `services/usage` ledgers every real completion's
+   tokens + estimated USD cost (`llm_usage` table, migration `7c1a9e3b5f02`),
+   attributed to a user via a `contextvars` scope (`usage.account(user_id)`,
+   re-applied across the company‖salary thread pool). `check_user_quota` now
+   enforces a rolling-window spend budget (`LLM_BUDGET_USD`) on top of the
+   request-count limiter. Pricing table is env-overridable (`LLM_PRICING_JSON`).
+   Opt-in identical-completion cache (`LLM_CACHE_COMPLETIONS=1`) returns free
+   hits with no token/cost re-charge.
 8. **Observability shipping:** logs are structured JSON and metrics exist, but
    nothing exports them. Wire an OTLP/Prometheus exporter or a log drain;
    metrics are currently per-process snapshot-only.

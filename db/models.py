@@ -686,3 +686,38 @@ class BackgroundAnalysis(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+# ---------------------------------------------------------------------------
+# LLM usage ledger — per-call token accounting for cost controls + budgets
+# ---------------------------------------------------------------------------
+
+
+class LlmUsage(Base):
+    """One LLM completion's token usage + estimated cost.
+
+    Rows are written best-effort after each real provider call (demo-mode
+    calls record nothing). ``user_id`` is nullable: calls made outside an
+    attributed request (e.g. a CLI/maintenance path) are still ledgered for
+    global accounting with a NULL owner. Cost is stored as integer
+    micro-USD (millionths of a dollar) to keep it exact in the DB; the
+    pricing table that produces it lives in ``services/usage`` and is
+    env-overridable. ``services/usage.check_budget`` sums ``cost_micro_usd``
+    over a rolling window to enforce ``LLM_BUDGET_USD``.
+    """
+
+    __tablename__ = "llm_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_micro_usd: Mapped[int] = mapped_column(sa_BigInt, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )

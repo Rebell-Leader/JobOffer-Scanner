@@ -20,19 +20,24 @@ def analyze_payload(
     manual_inputs: Optional[dict] = None,
     model: str = "detailed",
     resume_text: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> dict:
     """Run the analysis pipeline (no progress callback — async has no live UI).
 
     Strips any non-serializable bits before returning so the result can cross
-    the Celery result backend as JSON.
+    the Celery result backend as JSON. ``user_id`` opens a usage-accounting
+    scope so LLM spend in the worker is attributed to the requesting user.
     """
-    result = run_analysis(
-        job_posting,
-        manual_inputs=manual_inputs,
-        model=model,
-        progress_callback=None,
-        resume_text=resume_text,
-    )
+    from services.usage import account
+
+    with account(user_id):
+        result = run_analysis(
+            job_posting,
+            manual_inputs=manual_inputs,
+            model=model,
+            progress_callback=None,
+            resume_text=resume_text,
+        )
     result.pop("progress_callback", None)
     return result
 

@@ -95,8 +95,14 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
     worker_state = dict(state)
     worker_state["progress_callback"] = None
 
+    # Re-open the usage-accounting scope inside each worker thread so LLM calls
+    # there are still attributed to the user — contextvars don't propagate into
+    # ThreadPoolExecutor threads, so we capture the value here and re-apply it.
+    from services.usage import account, current_user
+    _acct_user = current_user()
+
     def _run(stage_name, fn, s):
-        with timed_block("pipeline.stage", tags={"stage": stage_name}):
+        with account(_acct_user), timed_block("pipeline.stage", tags={"stage": stage_name}):
             return fn(s)
 
     with ThreadPoolExecutor(max_workers=2) as pool:

@@ -90,6 +90,7 @@ def submit_background_analysis(
         manual_inputs=manual_inputs,
         model=model,
         resume_text=resume_text,
+        user_id=user_id,
     )
     if task_id is None:
         return None

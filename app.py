@@ -1188,7 +1188,9 @@ with analyze_tab:
                         "re-run."
                     )
 
-            with st.spinner("Analyzing job posting..."):
+            from services.usage import account as _account_usage
+            with st.spinner("Analyzing job posting..."), \
+                    _account_usage(st.session_state.user_id):
                 result = run_analysis(
                     posting_text,
                     job_data,
