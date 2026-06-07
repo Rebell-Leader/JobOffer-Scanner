@@ -248,7 +248,8 @@ class AppRenderSmokeTests(unittest.TestCase):
         renders; this static check catches a nested `with st.expander` inside
         another `with st.expander` block regardless of runtime path.
         """
-        src = open(_APP_PATH, encoding="utf-8").read()
+        with open(_APP_PATH, encoding="utf-8") as fh:
+            src = fh.read()
         depth = 0
         max_depth = 0
         # Track indentation-based nesting of `with st.expander(` blocks. This is

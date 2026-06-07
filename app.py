@@ -270,7 +270,7 @@ def _render_oauth_buttons() -> None:
             st.session_state.oauth_provider = provider
             url = build_authorize_url(provider, state)
             label = {"google": "Google", "github": "GitHub"}.get(provider, provider)
-            st.link_button(f"Sign in with {label}", url, use_container_width=True)
+            st.link_button(f"Sign in with {label}", url, width="stretch")
     st.divider()
 
 
@@ -693,7 +693,7 @@ else:
 
 # Sign out lives at the bottom so it isn't the second sidebar click target.
 st.sidebar.markdown("---")
-if st.sidebar.button("Sign out", use_container_width=True):
+if st.sidebar.button("Sign out", width="stretch"):
     for key in ("user_id", "user_email", "last_result", "last_inputs"):
         st.session_state.pop(key, None)
     st.rerun()
@@ -1381,7 +1381,7 @@ with applications_tab:
                     )
                     st.altair_chart(
                         (line + dots).properties(height=180),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                 # ----- Pipeline stages -----
@@ -1886,7 +1886,7 @@ with analytics_tab:
                     for v in dash.verdict_outcomes
                 ],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(
                 "Correlation isn't causation — but a consistent gap between "
@@ -1952,7 +1952,7 @@ with analytics_tab:
             chart_height = max(180, row_height * len(label_order) + 60)
             st.altair_chart(
                 (line_per_app + dots_per_app).properties(height=chart_height),
-                use_container_width=True,
+                width="stretch",
             )
 
 
