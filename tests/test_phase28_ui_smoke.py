@@ -43,6 +43,27 @@ def _fmt_exc(at) -> str:
     except Exception:  # noqa: BLE001
         return str(at.exception)
 
+def _textarea_by_label(at, label):
+    for ta in at.text_area:
+        if (ta.label or "") == label:
+            return ta
+    return None
+
+
+def _button_by_label(at, label):
+    for b in at.button:
+        if (b.label or "") == label:
+            return b
+    return None
+
+
+def _button_by_key(at, key):
+    for b in at.button:
+        if getattr(b, "key", None) == key:
+            return b
+    return None
+
+
 def _fresh_db():
     from db.session import reset_engine_for_testing
     from services.rate_limit import reset_backend_for_testing
@@ -161,6 +182,64 @@ class AppRenderSmokeTests(unittest.TestCase):
         at.query_params["share"] = token
         at.run()
         self.assertEqual(len(at.exception), 0, msg=_fmt_exc(at))
+
+    # -- interaction paths (click, don't just render) ----------------------
+
+    def test_analyze_submit_in_demo_mode_renders_result(self):
+        """Submitting the analyze form in demo mode must run the pipeline and
+        render a result without error — covers the analyze -> render_result
+        callback path, not just initial render."""
+        user = _seed_dense_account()
+        at = self._run_app()
+        at.run()
+        at.session_state["user_id"] = user.id
+        at.session_state["user_email"] = user.email
+        at.run()
+        self.assertEqual(len(at.exception), 0, msg=_fmt_exc(at))
+
+        jd = _textarea_by_label(at, "Job description")
+        self.assertIsNotNone(jd, "Job description text area not found")
+        jd.set_value(
+            "Company: Acme\nTitle: ML Engineer\nLocation: Berlin\n"
+            "We need Python, AWS and PyTorch experience for a senior role."
+        )
+        submit = _button_by_label(at, "🔍 Analyze posting")
+        self.assertIsNotNone(submit, "Analyze submit button not found")
+        submit.click().run()
+
+        self.assertEqual(len(at.exception), 0, msg=_fmt_exc(at))
+        # The pipeline result is stashed in session_state and rendered.
+        try:
+            last = at.session_state["last_result"]
+        except (KeyError, AttributeError):
+            last = None
+        self.assertIsNotNone(last, "analyze submit did not produce a result")
+        self.assertTrue(last.get("final_report"))
+
+    def test_stage_quick_action_click_adds_stage(self):
+        """Clicking a stage quick-action button must add a stage + re-render
+        the dense application UI without error."""
+        from services.applications import list_applications
+        from services.stages import list_stages
+
+        user = _seed_dense_account()
+        app_id = list_applications(user.id)[0].id
+        before = len(list_stages(user.id, app_id))
+
+        at = self._run_app()
+        at.run()
+        at.session_state["user_id"] = user.id
+        at.session_state["user_email"] = user.email
+        at.run()
+
+        btn = _button_by_key(at, f"qa_{app_id}_technical_interview")
+        self.assertIsNotNone(btn, "technical_interview quick-action not found")
+        btn.click().run()
+
+        self.assertEqual(len(at.exception), 0, msg=_fmt_exc(at))
+        after = list_stages(user.id, app_id)
+        self.assertEqual(len(after), before + 1)
+        self.assertIn("technical_interview", [s.kind for s in after])
 
     def test_no_nested_expanders_in_source(self):
         """Belt-and-suspenders static guard: app.py must not nest expanders.
