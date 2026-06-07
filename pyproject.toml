@@ -13,6 +13,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "bcrypt>=4.1.0",
     "beautifulsoup4>=4.13.3",
+    "cryptography>=41.0.0",
     "fastapi>=0.110.0",
     "fpdf2>=2.8.7",
     "langchain>=0.3.19",

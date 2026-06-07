@@ -93,11 +93,14 @@ class User(Base):
 class UserTwoFactor(Base):
     """TOTP-based second factor for one user.
 
-    ``secret`` is the base32 TOTP shared secret. It is stored unencrypted
-    here — for production-grade key protection, layer in an envelope-
-    encryption step using a KMS-derived key. TOTP is secondary defence;
-    the primary protection against credential stuffing is the bcrypt
-    password hash, which remains intact under a DB-only compromise.
+    ``secret`` is the base32 TOTP shared secret. It is envelope-encrypted at
+    rest (``utils.crypto``, ``enc:v1:…``) whenever ``SECRETS_ENCRYPTION_KEY``
+    is configured; without a key it is stored plaintext (dev/demo) and any
+    legacy plaintext row is re-encrypted opportunistically on the next
+    successful verify. The wider column accommodates the Fernet ciphertext.
+    TOTP is secondary defence; the primary protection against credential
+    stuffing is the bcrypt password hash, which remains intact under a
+    DB-only compromise.
 
     ``backup_codes`` is the list of bcrypt-hashed one-time recovery codes
     the user can use instead of an OTP. Used codes are removed from the
@@ -113,7 +116,7 @@ class UserTwoFactor(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False, unique=True, index=True,
     )
-    secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
     verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     backup_codes: Mapped[Optional[list]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

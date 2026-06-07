@@ -162,8 +162,12 @@ and "production-grade for real multi-user traffic." Prioritized:
 5. ✅ **CI quality gates:** ruff (lint) + mypy (type) + bandit (hard gate) +
    pip-audit (advisory) + coverage floor 80% + JS tests in CI + Node-24 opt-in.
    Config in `pyproject.toml`; jobs in `.github/workflows/tests.yml`.
-6. **Secrets at rest:** envelope-encrypt the TOTP secret (KMS-derived key);
-   consider the same for OAuth-linked emails.
+6. ✅ **Secrets at rest:** the TOTP secret is envelope-encrypted via
+   `utils/crypto` (Fernet, key derived from `SECRETS_ENCRYPTION_KEY`) — stored
+   as `enc:v1:…`, transparently decrypted on read, pass-through plaintext when
+   unkeyed (dev/demo), and legacy plaintext rows re-encrypt opportunistically
+   on the next successful verify. Column widened 64→255 (migration
+   `5d2f8a1c4e7b`). Same primitive is reusable for OAuth-linked emails.
 7. **LLM cost controls:** token accounting + per-user budget (today's quota is
    a request count, not spend). Cache identical analyses (the cache exists; wire
    COL/news/LLM through it consistently).

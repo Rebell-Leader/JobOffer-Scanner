@@ -45,6 +45,7 @@ from db.models import User, UserTwoFactor
 from db.session import get_session
 from services.audit import record as _audit
 from services.rate_limit import RateLimiter, RateLimitExceeded
+from utils import crypto
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +109,13 @@ def pending_setup(user_id: int) -> bool:
 def start_setup(user_id: int, account_label: str) -> SetupResult:
     """Generate a fresh TOTP secret + provisioning URI. Idempotent."""
     secret = pyotp.random_base32()
+    stored = crypto.encrypt(secret)  # envelope-encrypted at rest when keyed
     with get_session() as session:
         row = session.execute(
             select(UserTwoFactor).where(UserTwoFactor.user_id == user_id)
         ).scalar_one_or_none()
         if row is None:
-            row = UserTwoFactor(user_id=user_id, secret=secret, verified=False)
+            row = UserTwoFactor(user_id=user_id, secret=stored, verified=False)
             session.add(row)
         else:
             # Unverified pending setup -> replace the secret. A verified row
@@ -123,7 +125,7 @@ def start_setup(user_id: int, account_label: str) -> SetupResult:
                 raise TOTPError(
                     "2FA is already enabled. Disable it first if you want a fresh setup."
                 )
-            row.secret = secret
+            row.secret = stored
         session.commit()
     issuer = "JobOffer Scanner"
     uri = pyotp.totp.TOTP(secret).provisioning_uri(name=account_label, issuer_name=issuer)
@@ -187,6 +189,11 @@ def verify_login(user_id: int, code: str) -> bool:
             return False
 
         if _verify_totp(row.secret, code):
+            # Opportunistically migrate a legacy plaintext secret to ciphertext
+            # now that we've proven the key works against it.
+            if crypto.encryption_enabled() and not crypto.is_encrypted(row.secret):
+                row.secret = crypto.encrypt(crypto.decrypt(row.secret))
+                session.commit()
             _VERIFY_LIMITER.reset(str(user_id))
             _audit("user.2fa.verify.success", user_id=user_id)
             return True
@@ -248,10 +255,19 @@ def _normalize_code(code: str) -> str:
 
 
 def _verify_totp(secret: str, code: str) -> bool:
-    """RFC-default TOTP verify with ±1-step (~30s) skew tolerance."""
+    """RFC-default TOTP verify with ±1-step (~30s) skew tolerance.
+
+    ``secret`` is the stored value, which may be envelope-encrypted
+    (``enc:v1:…``) or legacy plaintext; ``crypto.decrypt`` handles both.
+    """
     if not code.isdigit() or len(code) != 6:
         return False
-    return pyotp.TOTP(secret).verify(code, valid_window=1)
+    try:
+        plain = crypto.decrypt(secret)
+    except crypto.DecryptionError:
+        logger.error("TOTP secret could not be decrypted; check SECRETS_ENCRYPTION_KEY.")
+        return False
+    return pyotp.TOTP(plain).verify(code, valid_window=1)
 
 
 def _generate_canonical_backup_code() -> str:
