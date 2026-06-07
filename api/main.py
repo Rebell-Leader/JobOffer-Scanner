@@ -14,8 +14,10 @@ Streamlit app — they're sister processes that share state through Postgres
 from __future__ import annotations
 
 import logging
+import os
+from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Response, status
 
 from api.routes import router
 from api.security import add_security_headers
@@ -23,6 +25,9 @@ from db.session import init_db
 from utils.logging_setup import configure as configure_logging
 
 logger = logging.getLogger(__name__)
+
+# Prometheus exposition content type (text format v0.0.4).
+_PROM_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
 def create_app() -> FastAPI:
@@ -39,6 +44,25 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def healthz():
         return {"ok": True}
+
+    @app.get("/metrics")
+    def metrics(authorization: Optional[str] = Header(default=None)):
+        """Prometheus scrape endpoint for THIS process's metrics.
+
+        Off by default (returns 404) — set ``METRICS_ENABLED=1`` to expose it.
+        On a public deployment also set ``METRICS_TOKEN`` and have Prometheus
+        send ``Authorization: Bearer <token>`` so the metrics aren't world
+        readable. Metrics are per-process; Prometheus aggregates across scraped
+        instances.
+        """
+        if os.getenv("METRICS_ENABLED") != "1":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        token = os.getenv("METRICS_TOKEN")
+        if token and authorization != f"Bearer {token}":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        from utils.metrics import render_prometheus
+
+        return Response(content=render_prometheus(), media_type=_PROM_CONTENT_TYPE)
 
     return app
 

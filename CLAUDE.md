@@ -176,9 +176,13 @@ and "production-grade for real multi-user traffic." Prioritized:
    request-count limiter. Pricing table is env-overridable (`LLM_PRICING_JSON`).
    Opt-in identical-completion cache (`LLM_CACHE_COMPLETIONS=1`) returns free
    hits with no token/cost re-charge.
-8. **Observability shipping:** logs are structured JSON and metrics exist, but
-   nothing exports them. Wire an OTLP/Prometheus exporter or a log drain;
-   metrics are currently per-process snapshot-only.
+8. ✅ **Observability shipping:** `utils/metrics.render_prometheus` emits the
+   in-process registry in Prometheus text format; the REST API serves it at
+   `GET /metrics` (gated by `METRICS_ENABLED`, optional `METRICS_TOKEN` bearer).
+   Per-process is Prometheus's model — it scrapes each instance and aggregates
+   server-side. `worker/metrics_dump --prometheus|--push` adds a Pushgateway
+   stop-gap for cron-only deploys. Logs are already structured JSON (stdout
+   drain).
 9. ✅ **Live provider e2e** (`tests/test_e2e_live.py`, `RUN_E2E=1`): real
    round-trip per provider, real DuckDuckGo search, the agentic company
    fallback with no news/COL keys, URL ingest, optional Browserbase, and a

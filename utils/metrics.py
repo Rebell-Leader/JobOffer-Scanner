@@ -16,6 +16,7 @@ quantiles. Good enough for "is the p95 LLM latency above 30s today?"
 
 from __future__ import annotations
 
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -192,3 +193,73 @@ def render_snapshot_text(snap: Optional[MetricsSnapshot] = None) -> str:
     if not lines:
         lines.append("(no metrics recorded yet)")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Prometheus exposition format
+# ---------------------------------------------------------------------------
+#
+# Lets a Prometheus server scrape ``GET /metrics`` (api/main.py) or a cron job
+# push to a Pushgateway (worker/metrics_dump --push). The registry is per
+# process, which is exactly Prometheus's model: it scrapes each instance and
+# aggregates server-side — so multi-instance metrics "ship" without us building
+# cross-process aggregation. Counters map to ``counter``; histograms map to a
+# ``summary`` (quantiles + _sum + _count) plus _min/_max gauges.
+
+_NAME_RE = re.compile(r"[^a-zA-Z0-9_:]")
+
+
+def _prom_name(name: str) -> str:
+    """Sanitise a metric name to the Prometheus charset ([a-zA-Z0-9_:])."""
+    cleaned = _NAME_RE.sub("_", name)
+    # A name must start with a letter, underscore, or colon.
+    if cleaned and cleaned[0].isdigit():
+        cleaned = "_" + cleaned
+    return cleaned or "_"
+
+
+def _prom_label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _prom_labels(tags: Tuple[Tuple[str, str], ...], extra: Tuple[Tuple[str, str], ...] = ()) -> str:
+    pairs = list(tags) + list(extra)
+    if not pairs:
+        return ""
+    inner = ",".join(f'{_prom_name(k)}="{_prom_label_value(v)}"' for k, v in pairs)
+    return "{" + inner + "}"
+
+
+def render_prometheus(snap: Optional[MetricsSnapshot] = None) -> str:
+    """Render the snapshot in Prometheus text exposition format (v0.0.4)."""
+    snap = snap or snapshot()
+    lines: List[str] = []
+
+    # Counters — declare TYPE once per metric name.
+    counters_by_name: Dict[str, List[CounterSnapshot]] = {}
+    for c in snap.counters:
+        counters_by_name.setdefault(_prom_name(c.name), []).append(c)
+    for name, cgroup in counters_by_name.items():
+        lines.append(f"# TYPE {name} counter")
+        for c in cgroup:
+            lines.append(f"{name}{_prom_labels(c.tags)} {c.value}")
+
+    # Histograms -> summary (quantiles + _sum + _count) plus _min/_max gauges.
+    hists_by_name: Dict[str, List[HistogramSnapshot]] = {}
+    for h in snap.histograms:
+        hists_by_name.setdefault(_prom_name(h.name), []).append(h)
+    for name, hgroup in hists_by_name.items():
+        lines.append(f"# TYPE {name} summary")
+        for h in hgroup:
+            for q, val in (("0.5", h.p50), ("0.95", h.p95), ("0.99", h.p99)):
+                lines.append(f"{name}{_prom_labels(h.tags, (('quantile', q),))} {val}")
+            lines.append(f"{name}_sum{_prom_labels(h.tags)} {h.sum}")
+            lines.append(f"{name}_count{_prom_labels(h.tags)} {h.count}")
+        lines.append(f"# TYPE {name}_min gauge")
+        for h in hgroup:
+            lines.append(f"{name}_min{_prom_labels(h.tags)} {h.min}")
+        lines.append(f"# TYPE {name}_max gauge")
+        for h in hgroup:
+            lines.append(f"{name}_max{_prom_labels(h.tags)} {h.max}")
+
+    return "\n".join(lines) + "\n"
