@@ -28,21 +28,22 @@ agents/                 LangGraph pipeline: orchestrator + per-stage agents
 tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
   url_ingest, browser_scraper (Playwright, optional)
-services/               Business logic (28 modules) — the bulk of the app
+services/               Business logic (29 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
   master_cv, projects, tailoring, constraint_check, suggestions, pdf_export  (CV/artifacts)
   sharing, webhooks, telegram_link, notifications, email, reminders  (integrations)
-  checkpoint, bulk_import, system_test, analysis_runner
+  checkpoint, bulk_import, system_test, analysis_runner,
+  account_export, email_verify
 db/                     SQLAlchemy 2.0 models + session (StaticPool-aware)
 api/                    FastAPI app: routes, bearer auth, security headers
 bot/                    Telegram bot: handlers (pure) + main (runtime)
 worker/                 Celery app + tasks + CLI runners (reminders, metrics_dump)
 utils/                  llm, config, security, diff, verdict, logging_setup, metrics, timing, cache
-migrations/             Alembic (14 revisions, 18 tables)
+migrations/             Alembic (15 revisions, 19 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddyfile + nginx reverse-proxy examples (CSP/HSTS)
-tests/                  28 files, 468 Python tests + 9 JS (extract.test.mjs)
+tests/                  31 files, 506 Python tests + 9 JS (extract.test.mjs)
 ```
 
 ## How to run
@@ -64,7 +65,7 @@ celery -A worker.celery_app:app worker
 python -m worker.reminders
 
 # Tests
-python -m unittest discover -s tests      # ~5 min, 468 tests
+python -m unittest discover -s tests      # ~5 min, 506 tests
 node chrome-extension/extract.test.mjs    # 9 JS tests
 
 # Migrations
@@ -139,23 +140,23 @@ same canned "TechCorp" text regardless of input) to the current product:
 The app is feature-complete and deployed, but several things stand between it
 and "production-grade for real multi-user traffic." Prioritized:
 
-### P0 — do before scaling past one instance / real users
-1. **State that's in-process won't survive horizontal scaling.** `utils/cache.SimpleCache`,
-   `services/checkpoint`, `utils/metrics`, and the default rate-limit backend
-   are per-process. Rate-limit already supports Redis; do the same for the
-   cache + checkpoint store (or accept single-instance Reserved-VM only).
-2. **`use_container_width` is deprecated and past its removal date
-   (2025-12-31).** 5 call sites in `app.py`. Migrate to `width="stretch"`
-   before a Streamlit bump breaks the UI.
-3. **Account lifecycle gaps:** no email verification on signup, no "delete my
-   account / export all my data" (GDPR). FK cascades exist, but expose the
-   action. `RESET_TOKEN_SURFACE_IN_UI` and reset-token logging must be off in
-   prod.
-4. **Schema drift guard.** App boots with `create_all` by default; prod uses
-   Alembic. Add a CI check (`alembic check` / autogenerate-diff) so models and
-   migrations can't silently diverge.
+### P0 — ✅ DONE (all four shipped)
+1. ✅ **Horizontal-scaling state.** `utils/cache` and `services/checkpoint`
+   gained Redis backends behind `REDIS_URL` (same detection + graceful
+   fallback as rate-limiting). Metrics aggregation across instances is still
+   per-process — that's folded into P1 "observability shipping".
+2. ✅ **`use_container_width` → `width="stretch"`** (all 5 sites); the
+   AppTest smoke test confirms no deprecation warnings.
+3. ✅ **Account lifecycle:** email verification on signup (soft banner;
+   `REQUIRE_EMAIL_VERIFICATION=1` to hard-gate), `delete_account`
+   (password-gated, cascades — SQLite FK pragma now ON so cascade matches
+   Postgres), full data export (`services/account_export`, secrets excluded),
+   and reset-token logging now gated behind `RESET_TOKEN_SURFACE_IN_UI`.
+4. ✅ **Schema-drift guard** (`tests/test_phase29_schema_drift.py`): applies
+   all migrations and asserts no add/remove table-or-column drift vs the
+   models. Runs in CI via the unittest job.
 
-### P1 — hardening + confidence
+### P1 — hardening + confidence (now the top priority)
 5. **CI quality gates:** add lint (ruff), type-check (mypy), security scan
    (bandit + pip-audit), and a coverage floor. Run the JS tests in CI
    (add setup-node). Bump `actions/checkout`/`setup-python` off Node 20.
