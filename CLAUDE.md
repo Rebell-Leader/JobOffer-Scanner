@@ -27,7 +27,8 @@ agents/                 LangGraph pipeline: orchestrator + per-stage agents
   job_/company_/salary_/resume_analyzer.py, report_generator.py
 tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
-  url_ingest, browser_scraper (Playwright, optional)
+  url_ingest, browser_scraper (Playwright, optional),
+  company_research (agentic keyless DuckDuckGo + Browserbase fallback)
 services/               Business logic (29 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
@@ -43,7 +44,8 @@ utils/                  llm, config, security, diff, verdict, logging_setup, met
 migrations/             Alembic (15 revisions, 19 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddyfile + nginx reverse-proxy examples (CSP/HSTS)
-tests/                  31 files, 506 Python tests + 9 JS (extract.test.mjs)
+tests/                  33 files, 535 Python tests (7 live e2e, skipped
+                        unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
 
 ## How to run
@@ -156,10 +158,10 @@ and "production-grade for real multi-user traffic." Prioritized:
    all migrations and asserts no add/remove table-or-column drift vs the
    models. Runs in CI via the unittest job.
 
-### P1 — hardening + confidence (now the top priority)
-5. **CI quality gates:** add lint (ruff), type-check (mypy), security scan
-   (bandit + pip-audit), and a coverage floor. Run the JS tests in CI
-   (add setup-node). Bump `actions/checkout`/`setup-python` off Node 20.
+### P1 — hardening + confidence (in progress)
+5. ✅ **CI quality gates:** ruff (lint) + mypy (type) + bandit (hard gate) +
+   pip-audit (advisory) + coverage floor 80% + JS tests in CI + Node-24 opt-in.
+   Config in `pyproject.toml`; jobs in `.github/workflows/tests.yml`.
 6. **Secrets at rest:** envelope-encrypt the TOTP secret (KMS-derived key);
    consider the same for OAuth-linked emails.
 7. **LLM cost controls:** token accounting + per-user budget (today's quota is
@@ -168,10 +170,17 @@ and "production-grade for real multi-user traffic." Prioritized:
 8. **Observability shipping:** logs are structured JSON and metrics exist, but
    nothing exports them. Wire an OTLP/Prometheus exporter or a log drain;
    metrics are currently per-process snapshot-only.
-9. **Live provider e2e:** every test mocks the LLM. Add a gated,
-   key-required smoke test (skipped without a key) that does one real
-   round-trip per provider so model/param regressions (like the GPT-5
-   `max_completion_tokens` change) are caught.
+9. ✅ **Live provider e2e** (`tests/test_e2e_live.py`, `RUN_E2E=1`): real
+   round-trip per provider, real DuckDuckGo search, the agentic company
+   fallback with no news/COL keys, URL ingest, optional Browserbase, and a
+   full real-posting pipeline run. Skipped by default (egress-restricted CI).
+
+**Agentic fallback (shipped, P1):** when `NEWS_API_KEY` is absent but an LLM
+key is set, `tools/company_research.agentic_company_research` does an
+LLM-directed **keyless DuckDuckGo** search ([research] extra: ddgs) and
+synthesises a briefing under the no-fabrication rule, optionally deep-fetching
+a top result via a **headless agentic browser** (Browserbase hosted, or the
+local Playwright scraper). Wired into `fetch_company_news` as tier 2.
 
 ### P2 — robustness + reach
 10. **JS-board scraping:** `browser_scraper` (Playwright) exists but isn't

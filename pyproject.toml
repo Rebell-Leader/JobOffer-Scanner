@@ -35,6 +35,7 @@ telegram = ["python-telegram-bot>=21.0"]
 worker = ["celery>=5.3.0", "redis>=5.0.0"]
 browser = ["playwright>=1.44.0"]
 pdf = ["fpdf2>=2.7.0"]
+research = ["ddgs>=6.0"]  # keyless DuckDuckGo search for the agentic fallback
 dev = [
     "ruff>=0.6",
     "mypy>=1.10",
