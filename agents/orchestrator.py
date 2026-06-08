@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Optional, TypedDict
 
@@ -15,6 +16,8 @@ from services.checkpoint import (
     get_store,
 )
 from utils.timing import timed_block
+
+logger = logging.getLogger(__name__)
 
 
 class JobAnalysisState(TypedDict, total=False):
@@ -111,14 +114,20 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
             futures["company"] = pool.submit(_run, "company", company_analyzer.analyze, dict(worker_state))
         if not salary_done:
             futures["salary"] = pool.submit(_run, "salary", salary_analyzer.analyze, dict(worker_state))
-        results = {name: f.result() for name, f in futures.items()}
+        # Capture each branch's outcome, converting an unexpected raise into an
+        # error result so one branch crashing can't lose the other's checkpoint.
+        results = {}
+        for name, f in futures.items():
+            try:
+                results[name] = f.result()
+            except Exception as exc:  # noqa: BLE001 - surfaced via state["error"]
+                logger.warning("Stage %s raised: %s", name, exc)
+                results[name] = {"error": f"{name} stage failed: {exc}"}
 
-    # Surface the first error from either branch — but persist whichever
-    # half succeeded so a retry doesn't redo it.
-    error = next(
-        (r.get("error") for r in results.values() if r.get("error")),
-        "",
-    )
+    # Surface BOTH branch errors (don't silently drop the second), but persist
+    # whichever half succeeded so a retry doesn't redo it.
+    branch_errors = [r.get("error") for r in results.values() if r.get("error")]
+    error = "; ".join(branch_errors)
 
     if "company" in results and not results["company"].get("error"):
         state["company_analysis"] = results["company"].get("company_analysis", {})

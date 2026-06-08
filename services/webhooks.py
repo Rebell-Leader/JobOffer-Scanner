@@ -237,6 +237,26 @@ def _celery_delivery_enabled() -> bool:
         return False
 
 
+def _has_active_subscriber(user_id: int, event: str) -> bool:
+    """Whether the user has any active webhook subscribed to ``event``.
+
+    A cheap pre-check so we don't spawn a delivery thread / enqueue a task (or,
+    in tests, race the in-memory connection) when nobody is listening — the
+    common case. Best-effort: a query failure returns False (skip dispatch).
+    """
+    try:
+        with get_session() as session:
+            hooks = session.execute(
+                select(Webhook)
+                .where(Webhook.user_id == user_id)
+                .where(Webhook.active.is_(True))
+            ).scalars().all()
+            return any(event in (h.events or []) for h in hooks)
+    except Exception as exc:  # noqa: BLE001 - never raise into the caller
+        logger.warning("Webhook subscriber check failed: %s", exc)
+        return False
+
+
 def dispatch_event_durable(user_id: int, event: str, payload: dict) -> None:
     """Production dispatch entry point.
 
@@ -245,6 +265,8 @@ def dispatch_event_durable(user_id: int, event: str, payload: dict) -> None:
     Without a broker: degrade to the fire-and-forget daemon thread. Never
     raises into the caller.
     """
+    if not _has_active_subscriber(user_id, event):
+        return  # nobody listening — skip the thread/queue entirely
     if not _celery_delivery_enabled():
         dispatch_event_background(user_id, event, payload)
         return

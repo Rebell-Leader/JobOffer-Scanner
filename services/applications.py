@@ -94,7 +94,22 @@ def save_analysis(
         session.add(app)
         session.commit()
         session.refresh(app)
-        return _to_record(app)
+        record = _to_record(app)
+
+    # Fire the webhook from the service so the API save-on-analyze path delivers
+    # it too (it previously fired only from the Streamlit save handler).
+    # Best-effort: dispatch_event_durable never raises into the caller.
+    from services.webhooks import dispatch_event_durable
+    dispatch_event_durable(
+        user_id, "application.saved",
+        {
+            "application_id": record.id,
+            "company_name": record.company_name,
+            "job_title": record.job_title,
+            "verdict": record.verdict,
+        },
+    )
+    return record
 
 
 def list_applications(user_id: int) -> List[ApplicationRecord]:

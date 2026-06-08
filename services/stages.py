@@ -137,7 +137,24 @@ def add_stage(
             app.status = new_status
         session.commit()
         session.refresh(stage)
-        return _to_record(stage)
+        record = _to_record(stage)
+        company_name, job_title = app.company_name, app.job_title
+
+    # Fire the webhook from the SERVICE so every entry point (UI, API, bot)
+    # delivers it — it previously lived only in the Streamlit handler.
+    # Best-effort: dispatch_event_durable never raises into the caller.
+    from services.webhooks import dispatch_event_durable
+    dispatch_event_durable(
+        user_id, "stage.added",
+        {
+            "application_id": application_id,
+            "company_name": company_name,
+            "job_title": job_title,
+            "stage": record.kind,
+            "occurred_on": record.occurred_on.isoformat(),
+        },
+    )
+    return record
 
 
 def list_stages(user_id: int, application_id: int) -> List[StageRecord]:

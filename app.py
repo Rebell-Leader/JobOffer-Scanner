@@ -139,7 +139,6 @@ from services.totp import (
 from services.webhooks import (
     WebhookError,
     delete_webhook,
-    dispatch_event_durable,
     list_webhooks,
     register_webhook,
 )
@@ -1242,23 +1241,14 @@ with analyze_tab:
                 save_notes = st.text_input("Notes (optional)", "")
             if st.form_submit_button("💾 Save analysis", type="primary"):
                 try:
-                    saved_rec = save_analysis(
+                    save_analysis(
                         user_id=st.session_state.user_id,
                         manual_inputs=st.session_state.last_inputs,
                         analysis_result=st.session_state.last_result,
                         status=save_status,
                         notes=save_notes or None,
                     )
-                    dispatch_event_durable(
-                        st.session_state.user_id, "application.saved",
-                        {
-                            "application_id": saved_rec.id,
-                            "company_name": saved_rec.company_name,
-                            "job_title": saved_rec.job_title,
-                            "verdict": saved_rec.verdict,
-                            "status": saved_rec.status,
-                        },
-                    )
+                    # The application.saved webhook now fires inside save_analysis.
                     st.success("Saved to My Applications.")
                 except ApplicationError as exc:
                     st.error(str(exc))
@@ -1568,18 +1558,9 @@ with applications_tab:
                                 st.session_state.user_id, rec.id, kind=kind,
                             )
                             # Best-effort Telegram notification — never raises.
+                            # (The stage.added webhook fires inside add_stage.)
                             notify_stage_added(
                                 st.session_state.user_id, rec, new_stage,
-                            )
-                            dispatch_event_durable(
-                                st.session_state.user_id, "stage.added",
-                                {
-                                    "application_id": rec.id,
-                                    "company_name": rec.company_name,
-                                    "job_title": rec.job_title,
-                                    "stage": kind,
-                                    "occurred_on": new_stage.occurred_on.isoformat(),
-                                },
                             )
                             st.rerun()
                         except StageError as exc:
@@ -1621,16 +1602,7 @@ with applications_tab:
                                 notify_stage_added(
                                     st.session_state.user_id, rec, new_stage,
                                 )
-                                dispatch_event_durable(
-                                    st.session_state.user_id, "stage.added",
-                                    {
-                                        "application_id": rec.id,
-                                        "company_name": rec.company_name,
-                                        "job_title": rec.job_title,
-                                        "stage": new_stage.kind,
-                                        "occurred_on": new_stage.occurred_on.isoformat(),
-                                    },
-                                )
+                                # stage.added webhook fires inside add_stage.
                                 st.success("Stage added.")
                                 st.rerun()
                             except StageError as exc:

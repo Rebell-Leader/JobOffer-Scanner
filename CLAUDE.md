@@ -94,12 +94,20 @@ mode** (sample data, clearly labelled). `DATABASE_URL` unset ⇒ SQLite at
   (not 403)** for another user's resource so IDs can't be enumerated.
 - **Best-effort side-effects never break the main flow.** Notifications
   (Telegram/email/webhooks) and audit writes log-and-continue; they must not
-  raise into the user action that triggered them. Webhooks dispatch on a
-  daemon thread.
+  raise into the user action that triggered them. The `stage.added` /
+  `application.saved` webhooks dispatch from the **service layer**
+  (`services/stages`, `services/applications`) so every entry point (UI, API,
+  bot) fires them; `dispatch_event_durable` skips work entirely when no active
+  subscriber exists, else enqueues a retrying Celery task (or a daemon thread
+  without a broker).
 - **Secrets are bcrypt-hashed at rest**: passwords, reset tokens, 2FA backup
-  codes, API tokens (with an indexed 8-char prefix for fast lookup). TOTP
-  secrets are stored plaintext by design (documented; envelope-encrypt for
-  hardened prod).
+  codes, API tokens (with an indexed 8-char prefix for fast lookup). The TOTP
+  secret is envelope-encrypted (`utils/crypto`, `enc:v1:…`) when
+  `SECRETS_ENCRYPTION_KEY` is set, else plaintext (dev/demo).
+- **OAuth auto-link requires a provider-VERIFIED email.** `services/oauth`
+  only links an external identity to a pre-existing local account when the
+  provider asserts the email is verified (Google OIDC claim / GitHub verified
+  primary) — otherwise it refuses (anti-account-takeover).
 - **Migrations:** add a model field ⇒ add an Alembic migration. CI runs the
   full `up → down → up` on real Postgres. `db.session.reset_engine_for_testing`
   uses **StaticPool** so thread-hopping tests (bot handlers, Streamlit

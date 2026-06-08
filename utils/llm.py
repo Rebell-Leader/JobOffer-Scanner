@@ -15,10 +15,13 @@ Key behavioural guarantees (the Phase-0 fix):
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Provider configuration
@@ -66,7 +69,7 @@ def _record_usage(provider: str, model: str, usage: Optional[dict]) -> None:
 
         usage_service.record_completion(provider, model, usage)
     except Exception as exc:  # noqa: BLE001 - accounting is best-effort
-        print(f"[llm] usage accounting skipped: {exc}")
+        logger.warning("usage accounting skipped: %s", exc)
 
 
 def _completion_cache_key(
@@ -171,7 +174,7 @@ def get_completion(
     provider = get_active_provider()
 
     if provider is None:
-        print("[llm] Demo mode (no provider key set) — returning sample data.")
+        logger.info("Demo mode (no provider key set) — returning sample data.")
         return generate_sample_response(prompt)
 
     resolved_model = resolve_model(provider, model)
@@ -216,7 +219,9 @@ def get_completion(
             return result
         except Exception as exc:  # noqa: BLE001 - retried/surfaced below
             last_error = exc
-            print(f"[llm] {provider} call failed (attempt {attempt}/{_MAX_RETRIES}): {exc}")
+            logger.warning(
+                "%s call failed (attempt %d/%d): %s", provider, attempt, _MAX_RETRIES, exc
+            )
             if attempt < _MAX_RETRIES:
                 time.sleep(2 ** (attempt - 1))  # 1s, 2s, 4s ...
 

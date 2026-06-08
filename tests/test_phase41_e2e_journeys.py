@@ -200,6 +200,43 @@ class TwoFactorLoginJourney(unittest.TestCase):
         self.assertFalse(totp.verify_login(self.user.id, code))
 
 
+class StageWebhookJourney(unittest.TestCase):
+    """Journey 5: a registered stage.added webhook fires when a stage is added
+    through the SERVICE (now entry-point-agnostic, not UI-only)."""
+
+    def setUp(self):
+        e2e.fresh_db()
+        self.user = e2e.make_user()
+        from services.applications import save_analysis
+        self.app = save_analysis(self.user.id, _MANUAL,
+                                 {"verdict": {"verdict": "Recommended", "light": "green"}})
+
+    def test_add_stage_delivers_webhook(self):
+        from unittest import mock
+
+        from services import webhooks
+        from services.stages import add_stage
+        from services.webhooks import list_deliveries, register_webhook
+
+        register_webhook(self.user.id, "https://example.test/hook", ["stage.added"])
+
+        class _Ok:
+            status_code = 200
+            text = "ok"
+
+        # Run the (normally daemon-thread) dispatch inline for a deterministic
+        # assertion, and stub the outbound POST.
+        with mock.patch.object(webhooks, "dispatch_event_background",
+                               side_effect=lambda u, e, p: webhooks.dispatch_event(u, e, p)), \
+             mock.patch.object(webhooks.requests, "post", return_value=_Ok()):
+            add_stage(self.user.id, self.app.id, kind="applied")
+
+        deliveries = list_deliveries(self.user.id)
+        self.assertEqual(len(deliveries), 1)
+        self.assertTrue(deliveries[0].success)
+        self.assertEqual(deliveries[0].event, "stage.added")
+
+
 class AgenticFallbackJourney(unittest.TestCase):
     """Journey 8: no news/COL keys, but a provider key + mocked DuckDuckGo →
     the agentic fallback synthesises a briefing that reaches company analysis."""
@@ -226,6 +263,33 @@ class AgenticFallbackJourney(unittest.TestCase):
         self.assertIsNotNone(out)
         # Synthesised by the (stubbed) LLM from the search snippets.
         self.assertGreater(len(out), 50)
+
+
+class OrchestratorErrorSurfacingJourney(unittest.TestCase):
+    """Both parallel-stage errors are surfaced (the second isn't dropped), and a
+    branch that raises is converted to an error rather than losing the other's
+    checkpoint."""
+
+    def setUp(self):
+        e2e.fresh_db()
+
+    def test_both_branch_errors_surface(self):
+        from unittest import mock
+
+        from agents import orchestrator
+
+        # company returns an error result; salary RAISES — both must reach the
+        # final error (and the raise must not crash the run).
+        with mock.patch.object(orchestrator.company_analyzer, "analyze",
+                               return_value={"error": "company boom"}), \
+             mock.patch.object(orchestrator.salary_analyzer, "analyze",
+                               side_effect=RuntimeError("salary kaboom")):
+            result = orchestrator.run_analysis(
+                _POSTING, manual_inputs=_MANUAL, model="fast",
+            )
+        err = result.get("error", "")
+        self.assertIn("company boom", err)
+        self.assertIn("kaboom", err)
 
 
 if __name__ == "__main__":
