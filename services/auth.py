@@ -131,7 +131,7 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
         return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
-def create_oauth_user(email: str) -> AuthedUser:
+def create_oauth_user(email: str, email_verified: bool = True) -> AuthedUser:
     """Create a user for an OAuth sign-up with an unusable random password.
 
     OAuth users authenticate via the external provider, never via password —
@@ -147,17 +147,18 @@ def create_oauth_user(email: str) -> AuthedUser:
         if existing is not None:
             return AuthedUser(id=existing.id, email=existing.email,
                               email_verified=existing.email_verified)
-        # OAuth users are verified by construction — the provider verified the
-        # email before returning it to us.
+        # New OAuth account. Trust the provider's email-verification status
+        # (the caller passes it through from the OIDC/verified-primary claim);
+        # default True for backward compatibility with non-OAuth callers.
         user = User(
             email=email,
             password_hash=_hash_password(secrets.token_urlsafe(32)),
-            email_verified=True,
+            email_verified=email_verified,
         )
         session.add(user)
         session.commit()
         session.refresh(user)
-        return AuthedUser(id=user.id, email=user.email, email_verified=True)
+        return AuthedUser(id=user.id, email=user.email, email_verified=email_verified)
 
 
 def find_user_by_email(email: str) -> Optional[AuthedUser]:

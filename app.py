@@ -1111,12 +1111,14 @@ with analyze_tab:
             }
             selected_model = "detailed" if "Detailed" in model_choice else "fast"
 
-            # Quota check — runs BEFORE the LLM does any work.
+            # Quota check — runs BEFORE the LLM does any work. Covers both the
+            # request-count rate limit and the rolling spend budget.
             from services.analysis_runner import check_user_quota
             from services.rate_limit import RateLimitExceeded
+            from services.usage import BudgetExceeded
             try:
                 check_user_quota(st.session_state.user_id)
-            except RateLimitExceeded as exc:
+            except (RateLimitExceeded, BudgetExceeded) as exc:
                 st.error(str(exc))
                 st.stop()
 

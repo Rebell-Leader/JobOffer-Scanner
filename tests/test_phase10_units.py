@@ -109,6 +109,33 @@ class ConstraintCheckTests(unittest.TestCase):
         self.assertFalse(check.is_clean)
         self.assertIn("tensorflow", check.new_proper_nouns)
 
+    def test_flags_invented_skill_written_lowercase(self):
+        # Regression guard: a fabricated skill in lowercase must still be
+        # flagged (the capitalization heuristic alone would miss it).
+        from services.constraint_check import check_tailored_output
+
+        tailored = "Built services with python and a bit of tensorflow."
+        check = check_tailored_output(MASTER_CV, PROJECTS, tailored, JOB_CONTEXT)
+        self.assertFalse(check.is_clean)
+        self.assertIn("tensorflow", check.new_proper_nouns)
+
+    def test_lowercase_source_skill_not_a_false_positive(self):
+        # A skill listed lowercase in the master CV must not be flagged when the
+        # tailored output capitalizes it.
+        from services.constraint_check import check_tailored_output
+
+        master = "Skills: python, kubernetes, aws."
+        tailored = "Deployed on Kubernetes and AWS using Python."
+        check = check_tailored_output(master, "", tailored, "")
+        self.assertNotIn("kubernetes", check.new_proper_nouns)
+        self.assertNotIn("python", check.new_proper_nouns)
+
+    def test_flags_pre_1950_year(self):
+        from services.constraint_check import check_tailored_output
+
+        check = check_tailored_output(MASTER_CV, PROJECTS, "Graduated 1949.", JOB_CONTEXT)
+        self.assertIn("1949", check.new_years)
+
     def test_flags_invented_year(self):
         from services.constraint_check import check_tailored_output
 

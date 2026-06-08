@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - older langchain layout
     from langchain.tools import Tool
 
 from utils.cache import cache
-from utils.llm import get_completion
+from utils.llm import get_completion, is_demo_mode
 from utils.security import wrap_untrusted
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,15 @@ Rules:
     try:
         parsed = json.loads(response)
     except json.JSONDecodeError as exc:
+        # With a real provider key set, non-JSON is a genuine call failure —
+        # surface it rather than returning an empty analysis that looks
+        # successful (the "raise, never fabricate" convention). The empty
+        # skeleton is only a defensive path for demo mode (which returns valid
+        # JSON anyway, so this is belt-and-suspenders).
+        if not is_demo_mode():
+            raise ValueError(
+                f"Requirements analysis returned non-JSON from the provider: {exc}"
+            ) from exc
         logger.warning("LLM returned non-JSON for requirements (%s); using empty fallback.", exc)
         parsed = {
             "technical_skills": [],
