@@ -217,5 +217,33 @@ class LlmWiringTests(unittest.TestCase):
         self.assertEqual(create.call_count, 1)
 
 
+class UsageObserverWiringTests(unittest.TestCase):
+    """The ledger is wired into utils.llm via an observer, so utils.llm stays a
+    leaf (no upward import of the services layer)."""
+
+    def test_utils_llm_does_not_import_services(self):
+        import pathlib
+        src = pathlib.Path(__file__).resolve().parents[1] / "utils" / "llm.py"
+        text = src.read_text()
+        self.assertNotIn("import services", text)
+        self.assertNotIn("from services", text)
+
+    def test_importing_services_registers_recorder(self):
+        import importlib
+
+        import utils.llm as llm
+        from services import usage
+        # services package import (above) wires the recorder.
+        self.assertIn(usage.record_completion, llm._usage_recorders)
+        importlib.import_module("services")  # idempotent — no duplicate
+
+    def test_register_is_idempotent(self):
+        import utils.llm as llm
+        from services import usage
+        before = llm._usage_recorders.count(usage.record_completion)
+        llm.register_usage_recorder(usage.record_completion)
+        self.assertEqual(llm._usage_recorders.count(usage.record_completion), before)
+
+
 if __name__ == "__main__":
     unittest.main()

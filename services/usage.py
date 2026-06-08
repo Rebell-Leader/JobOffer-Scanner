@@ -215,3 +215,11 @@ def check_budget(user_id: Optional[int]) -> None:
     spent = spend_usd(user_id)
     if spent >= budget:
         raise BudgetExceeded(spent, budget)
+
+
+# Register the ledger with the LLM client (observer pattern). This keeps
+# utils.llm a leaf — it notifies recorders rather than importing this module.
+# Importing services.usage (guaranteed early via services/__init__) wires it up.
+from utils.llm import register_usage_recorder  # noqa: E402
+
+register_usage_recorder(record_completion)

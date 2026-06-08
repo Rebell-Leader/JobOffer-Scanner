@@ -19,11 +19,27 @@ import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Callable, List, Optional, Tuple
 
 from utils.env import env_bool, env_float, env_int
 
 logger = logging.getLogger(__name__)
+
+# Usage type passed to observers: provider's token-usage dict, or None.
+UsageDict = Optional[dict]
+UsageRecorder = Callable[[str, str, UsageDict], None]
+
+# Observers notified after each REAL completion. ``services.usage`` registers
+# its ledger here (observer pattern) so this module stays a leaf — utils.llm
+# must never import the services layer. Registration is idempotent and happens
+# when ``services.usage`` is imported (guaranteed early via services/__init__).
+_usage_recorders: List[UsageRecorder] = []
+
+
+def register_usage_recorder(fn: UsageRecorder) -> None:
+    """Register a callback invoked as ``fn(provider, model, usage)`` per call."""
+    if fn not in _usage_recorders:
+        _usage_recorders.append(fn)
 
 # ---------------------------------------------------------------------------
 # Provider configuration
@@ -65,13 +81,16 @@ _MAX_RETRIES = env_int("LLM_MAX_RETRIES", 3)
 
 
 def _record_usage(provider: str, model: str, usage: Optional[dict]) -> None:
-    """Ledger token usage for a completed call. Never raises into the caller."""
-    try:
-        from services import usage as usage_service
+    """Notify registered usage observers about a completed call.
 
-        usage_service.record_completion(provider, model, usage)
-    except Exception as exc:  # noqa: BLE001 - accounting is best-effort
-        logger.warning("usage accounting skipped: %s", exc)
+    Best-effort: an observer failure is logged and never raised into the
+    caller. No-op when nothing is registered.
+    """
+    for recorder in _usage_recorders:
+        try:
+            recorder(provider, model, usage)
+        except Exception as exc:  # noqa: BLE001 - accounting is best-effort
+            logger.warning("usage accounting skipped: %s", exc)
 
 
 def _completion_cache_key(
@@ -247,7 +266,9 @@ _DEFAULT_SYSTEM_PROMPT = (
 # package being absent never breaks the active path).
 # ---------------------------------------------------------------------------
 
-def _complete_anthropic(prompt, model, system, temperature, max_tokens):
+def _complete_anthropic(
+    prompt: str, model: str, system: str, temperature: float, max_tokens: int,
+) -> Tuple[str, UsageDict]:
     from anthropic import Anthropic  # lazy import
 
     # The SDK reads ANTHROPIC_API_KEY and (optionally) ANTHROPIC_BASE_URL itself.
@@ -280,8 +301,9 @@ def _is_new_style_openai_model(model: str) -> bool:
 
 
 def _complete_openai_compatible(
-    provider, prompt, model, system, temperature, max_tokens
-):
+    provider: str, prompt: str, model: str, system: str,
+    temperature: float, max_tokens: int,
+) -> Tuple[str, UsageDict]:
     from openai import OpenAI  # lazy import
 
     if provider == "featherless":
