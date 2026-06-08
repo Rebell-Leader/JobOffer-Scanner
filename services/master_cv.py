@@ -18,6 +18,7 @@ from sqlalchemy import desc, select
 
 from db.models import MasterCV, MasterCVRevision
 from db.session import get_session
+from services._ownership import require_owned
 from tools.resume_tools import extract_resume_text  # PDF/DOCX/TXT parser
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
@@ -154,9 +155,7 @@ def restore_revision(user_id: int, revision_id: int) -> MasterCVRecord:
     reversible), then writes the revision's content as the current master CV.
     """
     with get_session() as session:
-        rev = session.get(MasterCVRevision, revision_id)
-        if rev is None or rev.user_id != user_id:
-            raise MasterCVError("Revision not found.")
+        rev = require_owned(session, MasterCVRevision, revision_id, user_id, MasterCVError, "Revision not found.")
         cv = session.execute(
             select(MasterCV).where(MasterCV.user_id == user_id)
         ).scalar_one_or_none()
@@ -181,9 +180,7 @@ def restore_revision(user_id: int, revision_id: int) -> MasterCVRecord:
 
 def delete_revision(user_id: int, revision_id: int) -> None:
     with get_session() as session:
-        rev = session.get(MasterCVRevision, revision_id)
-        if rev is None or rev.user_id != user_id:
-            raise MasterCVError("Revision not found.")
+        rev = require_owned(session, MasterCVRevision, revision_id, user_id, MasterCVError, "Revision not found.")
         session.delete(rev)
         session.commit()
 
@@ -198,9 +195,7 @@ def diff_revision_against_current(user_id: int, revision_id: int) -> str:
     from utils.diff import unified_diff  # local import — keeps the module light
 
     with get_session() as session:
-        rev = session.get(MasterCVRevision, revision_id)
-        if rev is None or rev.user_id != user_id:
-            raise MasterCVError("Revision not found.")
+        rev = require_owned(session, MasterCVRevision, revision_id, user_id, MasterCVError, "Revision not found.")
         cv = session.execute(
             select(MasterCV).where(MasterCV.user_id == user_id)
         ).scalar_one_or_none()

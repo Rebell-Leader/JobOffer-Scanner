@@ -30,6 +30,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
+from utils.env import env_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,7 +116,7 @@ class RedisCheckpointStore:
     """
 
     _NS = "joc:ckpt:"
-    _TTL = int(os.getenv("CHECKPOINT_TTL_SECONDS", "3600"))
+    _TTL = env_int("CHECKPOINT_TTL_SECONDS", 3600)
 
     def __init__(self, url: str) -> None:
         import redis  # lazy

@@ -37,13 +37,14 @@ from typing import List, Optional
 
 import requests
 
+from utils.env import env_bool, env_float, env_int
 from utils.llm import get_active_provider, get_completion
 from utils.security import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
 _DDG_HTML = "https://html.duckduckgo.com/html/"
-_HTTP_TIMEOUT = float(os.getenv("RESEARCH_HTTP_TIMEOUT", "10"))
+_HTTP_TIMEOUT = env_float("RESEARCH_HTTP_TIMEOUT", 10.0)
 _USER_AGENT = (
     "Mozilla/5.0 (compatible; JobOfferScannerBot/0.2; +https://example.invalid/bot)"
 )
@@ -52,7 +53,7 @@ _USER_AGENT = (
 def fallback_enabled() -> bool:
     """The agentic fallback needs an LLM (for queries + synthesis); it's off in
     demo mode and can be force-disabled."""
-    if os.getenv("COMPANY_RESEARCH_FALLBACK", "1") != "1":
+    if not env_bool("COMPANY_RESEARCH_FALLBACK", True):
         return False
     return get_active_provider() is not None
 
@@ -67,7 +68,7 @@ def ddg_search(query: str, max_results: Optional[int] = None) -> List[dict]:
     the HTML endpoint."""
     if not query:
         return []
-    limit = max_results or int(os.getenv("DDG_MAX_RESULTS", "5"))
+    limit = max_results or env_int("DDG_MAX_RESULTS", 5)
 
     lib_results = _ddg_via_library(query, limit)
     if lib_results:

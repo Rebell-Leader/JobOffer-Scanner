@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
@@ -28,6 +27,7 @@ from services.telegram_link import (
     unlink,
 )
 from tools.url_ingest import fetch_job_posting, is_url
+from utils.env import env_float
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +209,8 @@ async def handle_analyze(reply: Reply, args: str) -> None:
 # ---------------------------------------------------------------------------
 
 # Bot-level poll cadence + timeout for queued tasks.
-_BOT_POLL_INTERVAL = float(os.getenv("BOT_TASK_POLL_INTERVAL", "2.0"))
-_BOT_POLL_TIMEOUT = float(os.getenv("BOT_TASK_TIMEOUT", "600"))
+_BOT_POLL_INTERVAL = env_float("BOT_TASK_POLL_INTERVAL", 2.0)
+_BOT_POLL_TIMEOUT = env_float("BOT_TASK_TIMEOUT", 600.0)
 
 
 async def _run_analysis_for_bot(posting_text: str) -> dict:

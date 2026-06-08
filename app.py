@@ -152,6 +152,7 @@ from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
+from utils.env import env_bool
 from utils.logging_setup import configure as configure_logging
 
 # Page config
@@ -159,6 +160,10 @@ st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layo
 
 configure_logging()
 print_environment_status()
+if not st.session_state.get("_config_logged"):
+    from utils.config import log_effective_config
+    log_effective_config()
+    st.session_state["_config_logged"] = True
 init_db()
 
 
@@ -402,7 +407,7 @@ def render_auth() -> None:
                         # Self-hosted operator convenience — BOTH the UI display
                         # and the log line are gated on the same opt-in flag so a
                         # production deploy never leaks reset tokens to stdout/logs.
-                        if os.getenv("RESET_TOKEN_SURFACE_IN_UI") == "1":
+                        if env_bool("RESET_TOKEN_SURFACE_IN_UI"):
                             st.code(token, language=None)
                             st.caption("RESET_TOKEN_SURFACE_IN_UI=1 — disable in production.")
                             print(f"[auth] reset token for {forgot_email}: {token}")
@@ -454,7 +459,7 @@ def _render_verification_gate() -> None:
     if is_verified(st.session_state.user_id):
         return
 
-    hard_gate = os.getenv("REQUIRE_EMAIL_VERIFICATION") == "1"
+    hard_gate = env_bool("REQUIRE_EMAIL_VERIFICATION")
     box = st.warning if hard_gate else st.info
     box(
         "📧 Please verify your email"

@@ -20,6 +20,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from db.models import Base
+from utils.env import env_bool
 
 
 def _enable_sqlite_fk(engine: Engine) -> None:
@@ -80,7 +81,7 @@ def init_db() -> None:
     global _initialized
     if _initialized:
         return
-    if os.getenv("USE_ALEMBIC") == "1":
+    if env_bool("USE_ALEMBIC"):
         logger.info("USE_ALEMBIC=1 — skipping create_all; run `alembic upgrade head`.")
     else:
         Base.metadata.create_all(get_engine())

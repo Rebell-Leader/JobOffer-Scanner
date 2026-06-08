@@ -21,6 +21,8 @@ import re
 import time
 from typing import Optional
 
+from utils.env import env_bool, env_float, env_int
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -57,9 +59,9 @@ _AUTODETECT_ORDER = ["anthropic", "openai", "featherless"]
 
 _FEATHERLESS_BASE_URL = "https://api.featherless.ai/v1"
 
-DEFAULT_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
-DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
-_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+DEFAULT_TEMPERATURE = env_float("LLM_TEMPERATURE", 0.4)
+DEFAULT_MAX_TOKENS = env_int("LLM_MAX_TOKENS", 2000)
+_MAX_RETRIES = env_int("LLM_MAX_RETRIES", 3)
 
 
 def _record_usage(provider: str, model: str, usage: Optional[dict]) -> None:
@@ -76,7 +78,7 @@ def _completion_cache_key(
     provider: str, model: str, system: str, temperature: float, max_tokens: int, prompt: str
 ) -> Optional[str]:
     """A stable cache key for an identical call, or None when caching is off."""
-    if os.getenv("LLM_CACHE_COMPLETIONS", "0") != "1":
+    if not env_bool("LLM_CACHE_COMPLETIONS", False):
         return None
     import hashlib
 

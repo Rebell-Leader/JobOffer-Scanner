@@ -29,6 +29,7 @@ from db.models import (
     ApplicationStage,
 )
 from db.session import get_session
+from services._ownership import require_owned
 
 
 class StageError(ValueError):
@@ -118,9 +119,7 @@ def add_stage(
     occurred_on = occurred_on or date_cls.today()
 
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, StageError, "Application not found.")
         stage = ApplicationStage(
             application_id=application_id,
             kind=kind,
@@ -159,9 +158,7 @@ def add_stage(
 
 def list_stages(user_id: int, application_id: int) -> List[StageRecord]:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Application not found.")
+        require_owned(session, Application, application_id, user_id, StageError, "Application not found.")
         rows = session.execute(
             select(ApplicationStage)
             .where(ApplicationStage.application_id == application_id)
@@ -175,9 +172,7 @@ def delete_stage(user_id: int, stage_id: int) -> None:
         stage = session.get(ApplicationStage, stage_id)
         if stage is None:
             raise StageError("Stage not found.")
-        app = session.get(Application, stage.application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Stage not found.")
+        app = require_owned(session, Application, stage.application_id, user_id, StageError, "Stage not found.")
         session.delete(stage)
         session.flush()
         # Re-derive status from the remaining stages.

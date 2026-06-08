@@ -22,6 +22,7 @@ from fastapi import FastAPI, Header, HTTPException, Response, status
 from api.routes import router
 from api.security import add_security_headers
 from db.session import init_db
+from utils.env import env_bool, env_int
 from utils.logging_setup import configure as configure_logging
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ _PROM_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 def create_app() -> FastAPI:
     configure_logging()
+    from utils.config import log_effective_config
+    log_effective_config()
     init_db()
     app = FastAPI(
         title="JobOffer Scanner API",
@@ -55,7 +58,7 @@ def create_app() -> FastAPI:
         readable. Metrics are per-process; Prometheus aggregates across scraped
         instances.
         """
-        if os.getenv("METRICS_ENABLED") != "1":
+        if not env_bool("METRICS_ENABLED"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         token = os.getenv("METRICS_TOKEN")
         if token and authorization != f"Bearer {token}":
@@ -82,8 +85,8 @@ def main() -> None:
     uvicorn.run(
         "api.main:app",
         host=os.getenv("API_HOST", "127.0.0.1"),
-        port=int(os.getenv("API_PORT", "8000")),
-        reload=os.getenv("API_RELOAD") == "1",
+        port=env_int("API_PORT", 8000),
+        reload=env_bool("API_RELOAD"),
     )
 
 

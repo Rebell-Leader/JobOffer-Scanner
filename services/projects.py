@@ -16,6 +16,7 @@ from sqlalchemy import asc, select
 
 from db.models import Project
 from db.session import get_session
+from services._ownership import require_owned
 
 
 class ProjectError(ValueError):
@@ -114,9 +115,7 @@ def update_project(
         fields["highlights"] = _coerce_highlights(fields["highlights"])
 
     with get_session() as session:
-        p = session.get(Project, project_id)
-        if p is None or p.user_id != user_id:
-            raise ProjectError("Project not found.")
+        p = require_owned(session, Project, project_id, user_id, ProjectError, "Project not found.")
         for k, v in fields.items():
             if hasattr(p, k):
                 # Normalize empty-string strings to None for nullable columns.
@@ -130,9 +129,7 @@ def update_project(
 
 def delete_project(user_id: int, project_id: int) -> None:
     with get_session() as session:
-        p = session.get(Project, project_id)
-        if p is None or p.user_id != user_id:
-            raise ProjectError("Project not found.")
+        p = require_owned(session, Project, project_id, user_id, ProjectError, "Project not found.")
         session.delete(p)
         session.commit()
 

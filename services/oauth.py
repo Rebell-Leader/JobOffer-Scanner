@@ -38,10 +38,11 @@ from db.models import OAuthIdentity
 from db.session import get_session
 from services.audit import record as _audit
 from services.auth import AuthedUser, create_oauth_user, find_user_by_email
+from utils.env import env_float
 
 logger = logging.getLogger(__name__)
 
-_HTTP_TIMEOUT = float(os.getenv("OAUTH_HTTP_TIMEOUT", "10"))
+_HTTP_TIMEOUT = env_float("OAUTH_HTTP_TIMEOUT", 10.0)
 
 
 class OAuthError(ValueError):

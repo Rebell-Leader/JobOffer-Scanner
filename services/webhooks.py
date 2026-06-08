@@ -27,7 +27,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
 import threading
 from dataclasses import dataclass
@@ -39,27 +38,23 @@ from sqlalchemy import desc, select
 
 from db.models import WEBHOOK_EVENTS, Webhook, WebhookDelivery
 from db.session import get_session
+from services._ownership import require_owned
 from services.audit import record as _audit
+from utils.env import env_bool, env_float, env_int
 
 logger = logging.getLogger(__name__)
 
-_DELIVERY_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", "8"))
+_DELIVERY_TIMEOUT = env_float("WEBHOOK_TIMEOUT", 8.0)
 
 
 def _max_attempts() -> int:
     """Total delivery attempts before giving up (initial + retries)."""
-    try:
-        return max(1, int(os.getenv("WEBHOOK_MAX_ATTEMPTS", "5")))
-    except ValueError:
-        return 5
+    return max(1, env_int("WEBHOOK_MAX_ATTEMPTS", 5))
 
 
 def _retry_backoff_base() -> float:
     """Base seconds for exponential retry backoff (base * 2**retry_index)."""
-    try:
-        return float(os.getenv("WEBHOOK_RETRY_BACKOFF", "10"))
-    except ValueError:
-        return 10.0
+    return env_float("WEBHOOK_RETRY_BACKOFF", 10.0)
 
 
 def retry_delay_for(retry_index: int) -> float:
@@ -149,18 +144,14 @@ def list_webhooks(user_id: int) -> List[WebhookRecord]:
 
 def set_active(user_id: int, webhook_id: int, active: bool) -> None:
     with get_session() as session:
-        wh = session.get(Webhook, webhook_id)
-        if wh is None or wh.user_id != user_id:
-            raise WebhookError("Webhook not found.")
+        wh = require_owned(session, Webhook, webhook_id, user_id, WebhookError, "Webhook not found.")
         wh.active = bool(active)
         session.commit()
 
 
 def delete_webhook(user_id: int, webhook_id: int) -> None:
     with get_session() as session:
-        wh = session.get(Webhook, webhook_id)
-        if wh is None or wh.user_id != user_id:
-            raise WebhookError("Webhook not found.")
+        wh = require_owned(session, Webhook, webhook_id, user_id, WebhookError, "Webhook not found.")
         session.delete(wh)
         session.commit()
     _audit("webhook.delete", user_id=user_id, details={"webhook_id": webhook_id})
@@ -227,7 +218,7 @@ def dispatch_event_background(user_id: int, event: str, payload: dict) -> None:
 
 def _celery_delivery_enabled() -> bool:
     """True when a Celery broker is available for durable webhook delivery."""
-    if os.getenv("WEBHOOK_ASYNC", "1") != "1":
+    if not env_bool("WEBHOOK_ASYNC", True):
         return False
     try:
         from worker.celery_app import get_celery_app
@@ -366,9 +357,7 @@ def _deliver(hook: WebhookRecord, event: str, payload: dict) -> DeliveryRecord:
 def redeliver(user_id: int, delivery_id: int) -> DeliveryRecord:
     """Retry a previous delivery (re-POSTs the SAME payload to its webhook)."""
     with get_session() as session:
-        row = session.get(WebhookDelivery, delivery_id)
-        if row is None or row.user_id != user_id:
-            raise WebhookError("Delivery not found.")
+        row = require_owned(session, WebhookDelivery, delivery_id, user_id, WebhookError, "Delivery not found.")
         hook = session.get(Webhook, row.webhook_id)
         if hook is None:
             raise WebhookError("Webhook no longer exists.")

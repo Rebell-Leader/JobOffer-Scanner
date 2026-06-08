@@ -20,6 +20,8 @@ import smtplib
 from email.message import EmailMessage
 from typing import Optional
 
+from utils.env import env_bool, env_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,10 +52,10 @@ def send_email(to: str, subject: str, body: str) -> bool:
     # email_configured() above guarantees these are present; the "" defaults
     # are only to satisfy the type checker (str, not str | None).
     host = os.getenv("SMTP_HOST", "")
-    port = int(os.getenv("SMTP_PORT", "587"))
+    port = env_int("SMTP_PORT", 587)
     username = os.getenv("SMTP_USERNAME", "")
     password = os.getenv("SMTP_PASSWORD", "")
-    use_tls = os.getenv("SMTP_USE_TLS", "1") == "1"
+    use_tls = env_bool("SMTP_USE_TLS", True)
 
     try:
         with smtplib.SMTP(host, port, timeout=15) as server:

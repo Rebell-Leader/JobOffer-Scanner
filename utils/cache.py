@@ -21,9 +21,11 @@ import threading
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+from utils.env import env_int
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TTL = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+_DEFAULT_TTL = env_int("CACHE_TTL_SECONDS", 3600)
 _NAMESPACE = "joc:cache:"
 
 

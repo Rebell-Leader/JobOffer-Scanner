@@ -18,6 +18,7 @@ from sqlalchemy import desc, select
 
 from db.models import APPLICATION_STATUSES, Application
 from db.session import get_session
+from services._ownership import require_owned
 
 
 class ApplicationError(ValueError):
@@ -124,9 +125,7 @@ def list_applications(user_id: int) -> List[ApplicationRecord]:
 
 def get_application(user_id: int, application_id: int) -> ApplicationRecord:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise ApplicationError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, ApplicationError, "Application not found.")
         return _to_record(app)
 
 
@@ -139,9 +138,7 @@ def update_status(
     if status is not None and status not in APPLICATION_STATUSES:
         raise ApplicationError(f"Unknown status {status!r}.")
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise ApplicationError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, ApplicationError, "Application not found.")
         if status is not None:
             app.status = status
         if notes is not None:
@@ -153,9 +150,7 @@ def update_status(
 
 def delete_application(user_id: int, application_id: int) -> None:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise ApplicationError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, ApplicationError, "Application not found.")
         session.delete(app)
         session.commit()
     # Audit AFTER commit so a failed delete isn't recorded as if it happened.

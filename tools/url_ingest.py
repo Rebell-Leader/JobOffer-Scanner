@@ -26,13 +26,15 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+from utils.env import env_bool, env_float, env_int
+
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = (
     "Mozilla/5.0 (compatible; JobOfferScannerBot/0.2; +https://example.invalid/bot)"
 )
-_HTTP_TIMEOUT = float(os.getenv("URL_INGEST_TIMEOUT", "15"))
-_MAX_BYTES = int(os.getenv("URL_INGEST_MAX_BYTES", "1500000"))  # ~1.5 MB
+_HTTP_TIMEOUT = env_float("URL_INGEST_TIMEOUT", 15.0)
+_MAX_BYTES = env_int("URL_INGEST_MAX_BYTES", 1_500_000)  # ~1.5 MB
 
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -60,7 +62,7 @@ def is_js_board(url: str) -> bool:
 
 def browser_ingest_available() -> bool:
     """Whether any headless-browser backend is configured (local or hosted)."""
-    if os.getenv("BROWSER_SCRAPER_ENABLED") == "1":
+    if env_bool("BROWSER_SCRAPER_ENABLED"):
         return True
     return bool(os.getenv("BROWSERBASE_API_KEY") and os.getenv("BROWSERBASE_PROJECT_ID"))
 

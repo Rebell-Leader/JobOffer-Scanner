@@ -19,9 +19,11 @@ from typing import Optional
 
 import requests
 
+from utils.env import env_float
+
 logger = logging.getLogger(__name__)
 
-_HTTP_TIMEOUT = float(os.getenv("DATA_SOURCE_TIMEOUT", "10"))
+_HTTP_TIMEOUT = env_float("DATA_SOURCE_TIMEOUT", 10.0)
 _NEWS_ENDPOINT = "https://newsapi.org/v2/everything"
 _ADZUNA_ENDPOINT = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
 

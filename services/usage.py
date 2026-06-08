@@ -42,7 +42,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Dict, Iterator, Optional, Tuple
@@ -52,6 +51,7 @@ from sqlalchemy import func, select
 import utils.metrics as metrics
 from db.models import LlmUsage
 from db.session import get_session
+from utils.env import env_float, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def current_user() -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 def _pricing_table() -> Dict[str, Tuple[float, float]]:
-    raw = os.getenv("LLM_PRICING_JSON")
+    raw = env_str("LLM_PRICING_JSON")
     if not raw:
         return _DEFAULT_PRICING
     try:
@@ -182,17 +182,11 @@ def record_completion(
 # ---------------------------------------------------------------------------
 
 def _budget_usd() -> float:
-    try:
-        return float(os.getenv("LLM_BUDGET_USD", "0") or 0)
-    except ValueError:
-        return 0.0
+    return env_float("LLM_BUDGET_USD", 0.0)
 
 
 def _budget_window_seconds() -> int:
-    try:
-        return int(os.getenv("LLM_BUDGET_WINDOW_SECONDS", str(30 * 24 * 3600)))
-    except ValueError:
-        return 30 * 24 * 3600
+    return env_int("LLM_BUDGET_WINDOW_SECONDS", 30 * 24 * 3600)
 
 
 def spend_usd(user_id: int, window_seconds: Optional[int] = None) -> float:

@@ -135,12 +135,7 @@ class RateLimiter:
 
 # Defaults tuned for "hostile but not DoS" — generous enough for forgetful
 # users, strict enough that credential-stuffing or runaway costs get blocked.
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
+from utils.env import env_int as _env_int  # noqa: E402
 
 LOGIN_LIMITER = RateLimiter(
     "login",
