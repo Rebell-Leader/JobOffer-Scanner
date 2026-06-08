@@ -198,8 +198,12 @@ local Playwright scraper). Wired into `fetch_company_news` as tier 2.
 ### P2 — robustness + reach
 10. **JS-board scraping:** `browser_scraper` (Playwright) exists but isn't
     deployed; LinkedIn/Indeed/Glassdoor need it (or the Chrome extension).
-11. **Webhook delivery durability:** deliveries are best-effort daemon
-    threads; move to the Celery queue with retry/backoff for at-least-once.
+11. ✅ **Webhook delivery durability:** `dispatch_event_durable` enqueues a
+    per-delivery Celery task (`worker.tasks.deliver_webhook_task`) that retries
+    with exponential backoff (`WEBHOOK_MAX_ATTEMPTS`/`WEBHOOK_RETRY_BACKOFF`)
+    for at-least-once delivery; degrades to the daemon-thread path when no
+    broker. `attempt_delivery(delivery_id)` is the re-runnable single-attempt
+    unit (rebuilds the signed body from the stored row).
 12. **Backups + runbook:** automated Postgres backups, a restore drill, and a
     documented incident/runbook. None exist yet.
 13. **Reverse proxy on the real deployment:** the CSP/HSTS configs in `deploy/`

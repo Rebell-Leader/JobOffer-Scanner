@@ -139,7 +139,7 @@ from services.totp import (
 from services.webhooks import (
     WebhookError,
     delete_webhook,
-    dispatch_event_background,
+    dispatch_event_durable,
     list_webhooks,
     register_webhook,
 )
@@ -1247,7 +1247,7 @@ with analyze_tab:
                         status=save_status,
                         notes=save_notes or None,
                     )
-                    dispatch_event_background(
+                    dispatch_event_durable(
                         st.session_state.user_id, "application.saved",
                         {
                             "application_id": saved_rec.id,
@@ -1569,7 +1569,7 @@ with applications_tab:
                             notify_stage_added(
                                 st.session_state.user_id, rec, new_stage,
                             )
-                            dispatch_event_background(
+                            dispatch_event_durable(
                                 st.session_state.user_id, "stage.added",
                                 {
                                     "application_id": rec.id,
@@ -1619,7 +1619,7 @@ with applications_tab:
                                 notify_stage_added(
                                     st.session_state.user_id, rec, new_stage,
                                 )
-                                dispatch_event_background(
+                                dispatch_event_durable(
                                     st.session_state.user_id, "stage.added",
                                     {
                                         "application_id": rec.id,
