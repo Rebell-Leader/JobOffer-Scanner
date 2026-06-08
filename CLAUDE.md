@@ -204,8 +204,11 @@ local Playwright scraper). Wired into `fetch_company_news` as tier 2.
     for at-least-once delivery; degrades to the daemon-thread path when no
     broker. `attempt_delivery(delivery_id)` is the re-runnable single-attempt
     unit (rebuilds the signed body from the stored row).
-12. **Backups + runbook:** automated Postgres backups, a restore drill, and a
-    documented incident/runbook. None exist yet.
+12. ✅ **Backups + runbook:** `scripts/backup_db.sh` (pg_dump custom format,
+    retention pruning, optional offsite upload hook) + `scripts/restore_db.sh`
+    (confirmation-gated `pg_restore --clean`), documented in `deploy/RUNBOOK.md`
+    (backup schedule, monthly restore drill, incidents, escalation). Scripts
+    are syntax/guard-tested in `tests/test_phase38_ops_backup.py`.
 13. **Reverse proxy on the real deployment:** the CSP/HSTS configs in `deploy/`
     aren't applied on vanilla Replit; a hardened public deploy should sit
     behind Caddy/nginx (or an equivalent edge).
