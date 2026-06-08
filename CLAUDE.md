@@ -43,7 +43,9 @@ worker/                 Celery app + tasks + CLI runners (reminders, metrics_dum
 utils/                  llm, config, security, diff, verdict, logging_setup, metrics, timing, cache
 migrations/             Alembic (15 revisions, 19 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
-deploy/                 Caddyfile + nginx reverse-proxy examples (CSP/HSTS)
+deploy/                 Caddy/nginx reverse-proxy examples (CSP/HSTS) +
+                        README (edge topology) + RUNBOOK (backups/incidents)
+scripts/                backup_db.sh / restore_db.sh (Postgres ops)
 tests/                  33 files, 535 Python tests (7 live e2e, skipped
                         unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
@@ -195,9 +197,13 @@ synthesises a briefing under the no-fabrication rule, optionally deep-fetching
 a top result via a **headless agentic browser** (Browserbase hosted, or the
 local Playwright scraper). Wired into `fetch_company_news` as tier 2.
 
-### P2 — robustness + reach
-10. **JS-board scraping:** `browser_scraper` (Playwright) exists but isn't
-    deployed; LinkedIn/Indeed/Glassdoor need it (or the Chrome extension).
+### P2 — ✅ DONE (all four shipped)
+10. ✅ **JS-board scraping:** `url_ingest` now routes known JS boards
+    (LinkedIn/Indeed/Glassdoor/ZipRecruiter via `is_js_board`) and any
+    too-thin plain fetch through a headless browser — the local Playwright
+    scraper OR a **hosted Browserbase** session (`deep_fetch`, no local
+    chromium, so it works on a vanilla deploy). Honest paste-hint error when no
+    backend is configured. The Chrome extension remains the auth'd-board path.
 11. ✅ **Webhook delivery durability:** `dispatch_event_durable` enqueues a
     per-delivery Celery task (`worker.tasks.deliver_webhook_task`) that retries
     with exponential backoff (`WEBHOOK_MAX_ATTEMPTS`/`WEBHOOK_RETRY_BACKOFF`)
@@ -209,9 +215,11 @@ local Playwright scraper). Wired into `fetch_company_news` as tier 2.
     (confirmation-gated `pg_restore --clean`), documented in `deploy/RUNBOOK.md`
     (backup schedule, monthly restore drill, incidents, escalation). Scripts
     are syntax/guard-tested in `tests/test_phase38_ops_backup.py`.
-13. **Reverse proxy on the real deployment:** the CSP/HSTS configs in `deploy/`
-    aren't applied on vanilla Replit; a hardened public deploy should sit
-    behind Caddy/nginx (or an equivalent edge).
+13. ✅ **Reverse proxy on the real deployment:** `deploy/README.md` documents
+    the edge topology (TLS + CSP/HSTS + Secure cookies for the Streamlit UI,
+    pass-through for the self-hardening API) and how to apply the Caddy/nginx
+    examples or an equivalent edge (Cloudflare) on Replit. The header set is
+    guarded by `tests/test_phase40_edge_proxy.py`.
 
 ## Gotchas
 
