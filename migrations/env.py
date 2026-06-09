@@ -7,14 +7,15 @@ Reads the same ``DATABASE_URL`` (or SQLite default) the app uses, so
 from __future__ import annotations
 
 import os
+
+# Make ``db.models`` importable when alembic runs from the project root.
+import sys
 from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# Make ``db.models`` importable when alembic runs from the project root.
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from db.models import Base  # noqa: E402

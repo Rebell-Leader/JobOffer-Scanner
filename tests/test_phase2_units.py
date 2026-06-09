@@ -9,6 +9,33 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
+class AnalyzeRequirementsFailureTests(unittest.TestCase):
+    """analyze_requirements must surface a provider failure (non-JSON) when a
+    key is set, rather than returning an empty 'successful' analysis."""
+
+    def setUp(self):
+        from utils.cache import cache
+        cache.clear()
+
+    def test_raises_on_non_json_when_keyed(self):
+        from unittest import mock
+
+        import tools.job_tools as jt
+        with mock.patch.object(jt, "get_completion", return_value="not json at all"), \
+             mock.patch.object(jt, "is_demo_mode", return_value=False):
+            with self.assertRaises(ValueError):
+                jt.analyze_requirements("Some posting", model="fast")
+
+    def test_empty_skeleton_only_in_demo(self):
+        from unittest import mock
+
+        import tools.job_tools as jt
+        with mock.patch.object(jt, "get_completion", return_value="not json"), \
+             mock.patch.object(jt, "is_demo_mode", return_value=True):
+            out = jt.analyze_requirements("Some posting", model="fast")
+        self.assertEqual(out["technical_skills"], [])
+
+
 class AtsKeywordMatchTests(unittest.TestCase):
     def test_score_and_partition(self):
         from tools.resume_tools import ats_keyword_match

@@ -15,10 +15,31 @@ Key behavioural guarantees (the Phase-0 fix):
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Callable, List, Optional, Tuple
+
+from utils.env import env_bool, env_float, env_int
+
+logger = logging.getLogger(__name__)
+
+# Usage type passed to observers: provider's token-usage dict, or None.
+UsageDict = Optional[dict]
+UsageRecorder = Callable[[str, str, UsageDict], None]
+
+# Observers notified after each REAL completion. ``services.usage`` registers
+# its ledger here (observer pattern) so this module stays a leaf — utils.llm
+# must never import the services layer. Registration is idempotent and happens
+# when ``services.usage`` is imported (guaranteed early via services/__init__).
+_usage_recorders: List[UsageRecorder] = []
+
+
+def register_usage_recorder(fn: UsageRecorder) -> None:
+    """Register a callback invoked as ``fn(provider, model, usage)`` per call."""
+    if fn not in _usage_recorders:
+        _usage_recorders.append(fn)
 
 # ---------------------------------------------------------------------------
 # Provider configuration
@@ -54,9 +75,54 @@ _AUTODETECT_ORDER = ["anthropic", "openai", "featherless"]
 
 _FEATHERLESS_BASE_URL = "https://api.featherless.ai/v1"
 
-DEFAULT_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
-DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
-_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+DEFAULT_TEMPERATURE = env_float("LLM_TEMPERATURE", 0.4)
+DEFAULT_MAX_TOKENS = env_int("LLM_MAX_TOKENS", 2000)
+_MAX_RETRIES = env_int("LLM_MAX_RETRIES", 3)
+
+
+def _record_usage(provider: str, model: str, usage: Optional[dict]) -> None:
+    """Notify registered usage observers about a completed call.
+
+    Best-effort: an observer failure is logged and never raised into the
+    caller. No-op when nothing is registered.
+    """
+    for recorder in _usage_recorders:
+        try:
+            recorder(provider, model, usage)
+        except Exception as exc:  # noqa: BLE001 - accounting is best-effort
+            logger.warning("usage accounting skipped: %s", exc)
+
+
+def _completion_cache_key(
+    provider: str, model: str, system: str, temperature: float, max_tokens: int, prompt: str
+) -> Optional[str]:
+    """A stable cache key for an identical call, or None when caching is off."""
+    if not env_bool("LLM_CACHE_COMPLETIONS", False):
+        return None
+    import hashlib
+
+    payload = f"{provider}|{model}|{temperature}|{max_tokens}|{system}|{prompt}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"llm:completion:{digest}"
+
+
+def _cache_get(key: str) -> Optional[str]:
+    try:
+        from utils.cache import cache
+
+        value = cache.get(key)
+        return value if isinstance(value, str) else None
+    except Exception:  # noqa: BLE001 - cache must never break the call
+        return None
+
+
+def _cache_set(key: str, value: str) -> None:
+    try:
+        from utils.cache import cache
+
+        cache.set(key, value)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def get_active_provider() -> Optional[str]:
@@ -129,11 +195,23 @@ def get_completion(
     provider = get_active_provider()
 
     if provider is None:
-        print("[llm] Demo mode (no provider key set) — returning sample data.")
+        logger.info("Demo mode (no provider key set) — returning sample data.")
         return generate_sample_response(prompt)
 
     resolved_model = resolve_model(provider, model)
     system_prompt = system or _DEFAULT_SYSTEM_PROMPT
+
+    # Opt-in completion cache: identical (provider, model, system, params,
+    # prompt) calls return the cached text for free — no tokens, no cost, no
+    # ledger entry. Off by default (LLM_CACHE_COMPLETIONS=1 to enable) since
+    # most prompts are unique; valuable for repeated/identical analyses.
+    cache_key = _completion_cache_key(
+        provider, resolved_model, system_prompt, temperature, max_tokens, prompt
+    )
+    if cache_key is not None:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
 
     # Local import keeps utils/timing -> utils/metrics -> utils/llm cycle-free
     # for the (uncommon) callers that import the LLM client transitively.
@@ -147,18 +225,24 @@ def get_completion(
                 tags={"provider": provider, "model": resolved_model},
             ):
                 if provider == "anthropic":
-                    text = _complete_anthropic(
+                    text, usage = _complete_anthropic(
                         prompt, resolved_model, system_prompt, temperature, max_tokens
                     )
                 else:  # openai or featherless share the OpenAI-compatible client
-                    text = _complete_openai_compatible(
+                    text, usage = _complete_openai_compatible(
                         provider, prompt, resolved_model, system_prompt,
                         temperature, max_tokens,
                     )
-            return _strip_reasoning_tokens(text)
+            _record_usage(provider, resolved_model, usage)
+            result = _strip_reasoning_tokens(text)
+            if cache_key is not None:
+                _cache_set(cache_key, result)
+            return result
         except Exception as exc:  # noqa: BLE001 - retried/surfaced below
             last_error = exc
-            print(f"[llm] {provider} call failed (attempt {attempt}/{_MAX_RETRIES}): {exc}")
+            logger.warning(
+                "%s call failed (attempt %d/%d): %s", provider, attempt, _MAX_RETRIES, exc
+            )
             if attempt < _MAX_RETRIES:
                 time.sleep(2 ** (attempt - 1))  # 1s, 2s, 4s ...
 
@@ -182,7 +266,9 @@ _DEFAULT_SYSTEM_PROMPT = (
 # package being absent never breaks the active path).
 # ---------------------------------------------------------------------------
 
-def _complete_anthropic(prompt, model, system, temperature, max_tokens) -> str:
+def _complete_anthropic(
+    prompt: str, model: str, system: str, temperature: float, max_tokens: int,
+) -> Tuple[str, UsageDict]:
     from anthropic import Anthropic  # lazy import
 
     # The SDK reads ANTHROPIC_API_KEY and (optionally) ANTHROPIC_BASE_URL itself.
@@ -194,8 +280,18 @@ def _complete_anthropic(prompt, model, system, temperature, max_tokens) -> str:
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
-    parts = [block.text for block in resp.content if getattr(block, "type", None) == "text"]
-    return "".join(parts).strip()
+    parts = [
+        getattr(block, "text", "")
+        for block in resp.content
+        if getattr(block, "type", None) == "text"
+    ]
+    usage = None
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        inp = getattr(u, "input_tokens", 0) or 0
+        out = getattr(u, "output_tokens", 0) or 0
+        usage = {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
+    return "".join(parts).strip(), usage
 
 
 def _is_new_style_openai_model(model: str) -> bool:
@@ -209,8 +305,9 @@ def _is_new_style_openai_model(model: str) -> bool:
 
 
 def _complete_openai_compatible(
-    provider, prompt, model, system, temperature, max_tokens
-) -> str:
+    provider: str, prompt: str, model: str, system: str,
+    temperature: float, max_tokens: int,
+) -> Tuple[str, UsageDict]:
     from openai import OpenAI  # lazy import
 
     if provider == "featherless":
@@ -242,7 +339,17 @@ def _complete_openai_compatible(
                 {"role": "user", "content": prompt},
             ],
         )
-    return (resp.choices[0].message.content or "").strip()
+    usage = None
+    u = getattr(resp, "usage", None)
+    if u is not None:
+        prompt_toks = getattr(u, "prompt_tokens", 0) or 0
+        completion_toks = getattr(u, "completion_tokens", 0) or 0
+        usage = {
+            "prompt_tokens": prompt_toks,
+            "completion_tokens": completion_toks,
+            "total_tokens": getattr(u, "total_tokens", 0) or (prompt_toks + completion_toks),
+        }
+    return (resp.choices[0].message.content or "").strip(), usage
 
 
 def _strip_reasoning_tokens(text: str) -> str:
@@ -353,10 +460,6 @@ real job, company, and compensation analysis.
     )
 
 
-# Backwards-compatibility alias for any callers/tests referencing the old name.
-generate_mock_response = generate_sample_response
-
-
 def ping_provider(provider: str) -> tuple[bool, str]:
     """Make a minimal real API call to verify a provider is reachable.
 
@@ -371,19 +474,11 @@ def ping_provider(provider: str) -> tuple[bool, str]:
     prompt = "Reply with exactly one word: OK"
     try:
         if provider == "anthropic":
-            text = _complete_anthropic(prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
+            text, _ = _complete_anthropic(prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
         else:
-            text = _complete_openai_compatible(provider, prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
+            text, _ = _complete_openai_compatible(
+                provider, prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10
+            )
         return True, repr(text.strip()[:40])
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
-
-
-def get_llm_client():
-    """Deprecated: kept for backwards compatibility.
-
-    The provider client is now created per-request inside ``get_completion`` so
-    that provider/model selection is resolved at call time. Returns None in
-    demo mode.
-    """
-    return None

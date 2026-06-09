@@ -22,8 +22,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from agents.orchestrator import run_analysis
 from api.auth import require_user
+from services.analysis_runner import check_user_quota, run_analysis_sync
 from services.analytics import compute_dashboard
 from services.applications import (
     ApplicationError,
@@ -34,7 +34,8 @@ from services.applications import (
 )
 from services.auth import get_user
 from services.master_cv import MasterCVError, get_master_cv, save_master_cv
-
+from services.rate_limit import RateLimitExceeded
+from services.usage import BudgetExceeded
 
 router = APIRouter(prefix="/v1")
 
@@ -126,11 +127,26 @@ def post_analyze(
         "location": body.location or "",
         "compensation": body.compensation or "",
     }
-    result = run_analysis(
+
+    # Enforce the same cost controls as the web/worker paths BEFORE any tokens
+    # are spent: request-count rate limit + rolling spend budget. Map to the
+    # conventional HTTP statuses (429 too-many, 402 payment-required).
+    try:
+        check_user_quota(user_id)
+    except RateLimitExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except BudgetExceeded as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+    # run_analysis_sync opens the usage-accounting scope so this run's LLM
+    # tokens/cost are attributed to the caller (the direct run_analysis call
+    # would ledger them with a NULL owner and skip the budget).
+    result = run_analysis_sync(
         body.job_posting,
         manual_inputs=manual,
         model=body.model,
         resume_text=body.resume_text,
+        user_id=user_id,
     )
 
     if result.get("error"):

@@ -53,41 +53,59 @@ def main() -> int:
     from utils.logging_setup import configure as configure_logging
     configure_logging()
 
+    def _reply_for(message):
+        """Adapt Telegram's ``reply_markdown`` (returns a Message) to the
+        handlers' ``Reply = Callable[[str], Awaitable[None]]`` contract."""
+        async def _reply(text: str) -> None:
+            await message.reply_markdown(text)
+        return _reply
+
     async def _start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await handle_start(update.message.reply_markdown, _args="")
+        if update.message is None:
+            return
+        await handle_start(_reply_for(update.message), _args="")
 
     async def _help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        await handle_help(update.message.reply_markdown, _args="")
+        if update.message is None:
+            return
+        await handle_help(_reply_for(update.message), _args="")
 
     async def _analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        # ctx.args is everything after the command, split on spaces; we want
-        # the original text after `/analyze ` to preserve newlines, so use
-        # message.text and strip the command + first space.
-        raw = (update.message.text or "")
+        # We want the original text after `/analyze ` to preserve newlines, so
+        # use message.text and strip the command + first space.
+        if update.message is None:
+            return
+        raw = update.message.text or ""
         _, _, args = raw.partition(" ")
-        await handle_analyze(update.message.reply_markdown, args=args)
+        await handle_analyze(_reply_for(update.message), args=args)
 
     async def _bind(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        raw = (update.message.text or "")
+        if update.message is None or update.effective_chat is None:
+            return
+        raw = update.message.text or ""
         _, _, args = raw.partition(" ")
         chat = update.effective_chat
         await handle_bind(
-            update.message.reply_markdown,
+            _reply_for(update.message),
             args=args,
             chat_id=chat.id,
             chat_username=chat.username,
         )
 
     async def _unbind(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None or update.effective_chat is None:
+            return
         await handle_unbind(
-            update.message.reply_markdown,
+            _reply_for(update.message),
             args="",
             chat_id=update.effective_chat.id,
         )
 
     async def _me(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None or update.effective_chat is None:
+            return
         await handle_me(
-            update.message.reply_markdown,
+            _reply_for(update.message),
             args="",
             chat_id=update.effective_chat.id,
         )

@@ -20,6 +20,8 @@ import os
 from functools import lru_cache
 from typing import Optional
 
+from utils.env import env_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,7 +57,7 @@ def get_celery_app():
         result_serializer="json",
         accept_content=["json"],
         task_track_started=True,
-        task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", "600")),
+        task_time_limit=env_int("CELERY_TASK_TIME_LIMIT", 600),
         worker_max_tasks_per_child=50,
     )
     return celery

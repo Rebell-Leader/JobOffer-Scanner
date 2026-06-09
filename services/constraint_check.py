@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Set
+from typing import List, Optional, Set
 
 # ---------------------------------------------------------------------------
 # Token-extraction patterns
@@ -42,7 +42,10 @@ from typing import Iterable, List, Optional, Set
 _TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])([A-Z][\w+#./-]{1,40})(?![A-Za-z0-9])"
 )
-_YEAR_RE = re.compile(r"(?<!\d)(19[5-9]\d|20\d{2})(?!\d)")
+# Any plausible CV year (1900-2099). The previous range started at 1950, so a
+# fabricated pre-1950 date slipped the check; lookarounds keep it from matching
+# inside longer digit runs.
+_YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 _PCT_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?%)")
 
 # Money / quantity claims: "$10M", "10M users", "1.5B revenue", "5x growth".
@@ -71,6 +74,30 @@ COMMON_WORDS: Set[str] = {
     "dear", "hiring", "sincerely", "regards", "best",
     # Common generic resume phrases.
     "github", "linkedin",  # platforms; if real, would appear in master too
+}
+
+
+# Common tech skills/tools that are frequently written in lowercase. The
+# capitalization heuristic in _TOKEN_RE only captures Capitalized tokens, so a
+# fabricated skill written lowercase ("kubernetes") would otherwise never be
+# extracted from the output — and a legitimately-lowercase skill in the source
+# CV would never enter the allowed set (a false positive when the output
+# capitalizes it). Scanning for these known terms case-insensitively on BOTH
+# sides closes both holes without flagging ordinary lowercase prose.
+_SKILL_LEXICON: Set[str] = {
+    "python", "java", "javascript", "typescript", "golang", "rust", "ruby",
+    "php", "scala", "kotlin", "swift", "perl", "haskell", "elixir", "clojure",
+    "react", "angular", "vue", "svelte", "django", "flask", "fastapi", "rails",
+    "spring", "express", "node", "nodejs", "deno", "nextjs", "nestjs",
+    "tensorflow", "pytorch", "keras", "sklearn", "scikit-learn", "numpy",
+    "pandas", "spark", "hadoop", "kafka", "airflow", "dbt", "snowflake",
+    "postgres", "postgresql", "mysql", "sqlite", "mongodb", "redis",
+    "cassandra", "elasticsearch", "dynamodb", "kubernetes", "docker",
+    "terraform", "ansible", "jenkins", "gitlab", "github", "circleci",
+    "prometheus", "grafana", "datadog", "kibana", "aws", "gcp", "azure",
+    "linux", "kubernetes", "graphql", "grpc", "protobuf", "rabbitmq", "celery",
+    "nginx", "caddy", "envoy", "istio", "helm", "openai", "anthropic",
+    "langchain", "huggingface", "transformers",
 }
 
 
@@ -105,6 +132,12 @@ def extract_proper_nouns(text: str) -> Set[str]:
         for part in norm.split():
             if part not in COMMON_WORDS and len(part) >= 2:
                 out.add(part)
+    # Catch known skills written in lowercase (the capitalization gate above
+    # misses them). Word-boundaried so "java" doesn't match "javascript" etc.
+    low = text.casefold()
+    for skill in _SKILL_LEXICON:
+        if re.search(rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])", low):
+            out.add(skill)
     return out
 
 

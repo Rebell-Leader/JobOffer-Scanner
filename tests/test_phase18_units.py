@@ -260,8 +260,8 @@ class AuditTests(unittest.TestCase):
         self.assertIn("user.register", kinds)
 
     def test_login_success_and_failure_recorded(self):
-        from services.auth import AuthError, authenticate_user
         from services.audit import list_for_user
+        from services.auth import AuthError, authenticate_user
 
         with self.assertRaises(AuthError):
             authenticate_user("u@x.com", "wrongwrongwrong")
@@ -272,8 +272,8 @@ class AuditTests(unittest.TestCase):
         self.assertIn("user.login.failure", kinds)
 
     def test_login_failure_records_event_even_for_unknown_email(self):
-        from services.auth import AuthError, authenticate_user
         from services.audit import list_recent
+        from services.auth import AuthError, authenticate_user
 
         with self.assertRaises(AuthError):
             authenticate_user("nobody@nowhere.com", "longenough")

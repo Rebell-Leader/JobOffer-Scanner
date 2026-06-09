@@ -13,9 +13,10 @@ from __future__ import annotations
 import os
 import smtplib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
+from utils.env import env_bool, env_int
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -50,6 +51,7 @@ def _probe_database() -> TestResult:
     t0 = time.time()
     try:
         from sqlalchemy import text as sa_text
+
         from db.session import get_session
         session = get_session()
         session.execute(sa_text("SELECT 1"))
@@ -83,10 +85,10 @@ def _probe_email() -> TestResult:
     if not email_configured():
         return TestResult("Email (SMTP)", ok=False, message="Not configured", skipped=True)
     host = os.getenv("SMTP_HOST", "")
-    port = int(os.getenv("SMTP_PORT", "587"))
+    port = env_int("SMTP_PORT", 587)
     username = os.getenv("SMTP_USERNAME", "")
     password = os.getenv("SMTP_PASSWORD", "")
-    use_tls = os.getenv("SMTP_USE_TLS", "1") == "1"
+    use_tls = env_bool("SMTP_USE_TLS", True)
     t0 = time.time()
     try:
         with smtplib.SMTP(host, port, timeout=8) as server:
@@ -242,8 +244,14 @@ MOCK_ANALYSIS: dict = {
         "3. Prepare a system-design example (high-throughput Python service)"
     ),
     "verdict": {
-        "decision": "Apply",
+        # Canonical verdict shape used everywhere else in the app
+        # (utils/verdict.py + render_result): verdict / light / reasons /
+        # confidence. Keeping the mock on the same schema means the System
+        # Test tab renders the verdict badge identically to a real analysis.
+        "verdict": "Recommended",
+        "light": "green",
         "confidence": 8,
+        "source": "structured",
         "reasons": [
             "Compensation at / above market",
             "Well-funded (Series B, 18-month runway)",

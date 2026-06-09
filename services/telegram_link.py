@@ -34,6 +34,7 @@ from sqlalchemy import select
 
 from db.models import TelegramLink, TelegramLinkBindingToken
 from db.session import get_session
+from utils.env import env_float
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 BINDING_TOKEN_TTL = timedelta(minutes=15)
 _BINDING_TOKEN_BYTES = 16
 
-_TELEGRAM_HTTP_TIMEOUT = float(os.getenv("TELEGRAM_HTTP_TIMEOUT", "8"))
+_TELEGRAM_HTTP_TIMEOUT = env_float("TELEGRAM_HTTP_TIMEOUT", 8.0)
 _TELEGRAM_BASE = "https://api.telegram.org"
 
 

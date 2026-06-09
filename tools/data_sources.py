@@ -19,9 +19,11 @@ from typing import Optional
 
 import requests
 
+from utils.env import env_float
+
 logger = logging.getLogger(__name__)
 
-_HTTP_TIMEOUT = float(os.getenv("DATA_SOURCE_TIMEOUT", "10"))
+_HTTP_TIMEOUT = env_float("DATA_SOURCE_TIMEOUT", 10.0)
 _NEWS_ENDPOINT = "https://newsapi.org/v2/everything"
 _ADZUNA_ENDPOINT = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
 
@@ -45,30 +47,50 @@ def _format_news(articles: list, company_name: str, limit: int = 5) -> str:
 
 
 def fetch_company_news(company_name: str) -> Optional[str]:
-    """Fetch recent company news, or None if unavailable."""
+    """Fetch recent company news.
+
+    Tier 1: NewsAPI when ``NEWS_API_KEY`` is set. Tier 2: a keyless agentic
+    DuckDuckGo web-search fallback (when an LLM provider is configured).
+    Returns None only when neither yields anything — the caller then uses its
+    explicit "NOT AVAILABLE" sentinel.
+    """
     api_key = os.getenv("NEWS_API_KEY")
-    if not api_key or not company_name:
+    if api_key and company_name:
+        try:
+            resp = requests.get(
+                _NEWS_ENDPOINT,
+                params={
+                    "q": f'"{company_name}"',
+                    "sortBy": "publishedAt",
+                    "language": "en",
+                    "pageSize": "10",
+                    "apiKey": api_key or "",
+                },
+                timeout=_HTTP_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("status") == "ok":
+                return _format_news(data.get("articles", []), company_name)
+            logger.warning("newsapi returned status=%s", data.get("status"))
+        except Exception as exc:  # noqa: BLE001 - fall through to agentic tier
+            logger.warning("Company news fetch failed for %s: %s", company_name, exc)
+
+    # Tier 2: keyless agentic web-search fallback.
+    return _agentic_news_fallback(company_name)
+
+
+def _agentic_news_fallback(company_name: str) -> Optional[str]:
+    if not company_name:
         return None
     try:
-        resp = requests.get(
-            _NEWS_ENDPOINT,
-            params={
-                "q": f'"{company_name}"',
-                "sortBy": "publishedAt",
-                "language": "en",
-                "pageSize": 10,
-                "apiKey": api_key,
-            },
-            timeout=_HTTP_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("status") != "ok":
-            logger.warning("newsapi returned status=%s", data.get("status"))
-            return None
-        return _format_news(data.get("articles", []), company_name)
-    except Exception as exc:  # noqa: BLE001 - degrade to fallback sentinel
-        logger.warning("Company news fetch failed for %s: %s", company_name, exc)
+        from tools.company_research import agentic_company_research
+    except ImportError:
+        return None
+    try:
+        return agentic_company_research(company_name)
+    except Exception as exc:  # noqa: BLE001 - never break the pipeline
+        logger.warning("Agentic company research failed for %s: %s", company_name, exc)
         return None
 
 
@@ -243,7 +265,7 @@ def fetch_salary_benchmark(
         "app_id": app_id,
         "app_key": app_key,
         "what": job_title,
-        "results_per_page": 50,
+        "results_per_page": "50",
         "content-type": "application/json",
     }
     if location:

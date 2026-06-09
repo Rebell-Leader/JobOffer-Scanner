@@ -30,6 +30,7 @@ from sqlalchemy import desc, select
 
 from db.models import Application, ApplicationShare
 from db.session import get_session
+from services._ownership import require_owned
 from services.audit import record as _audit
 
 
@@ -95,9 +96,7 @@ def create_share(
     to rotate.
     """
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise ShareError("Application not found.")
+        require_owned(session, Application, application_id, user_id, ShareError, "Application not found.")
         expires_at = None
         if ttl_days and ttl_days > 0:
             expires_at = datetime.utcnow() + timedelta(days=ttl_days)
@@ -129,9 +128,7 @@ def list_shares_for_application(
     user_id: int, application_id: int,
 ) -> List[ShareRecord]:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise ShareError("Application not found.")
+        require_owned(session, Application, application_id, user_id, ShareError, "Application not found.")
         rows = session.execute(
             select(ApplicationShare)
             .where(ApplicationShare.application_id == application_id)
@@ -142,9 +139,7 @@ def list_shares_for_application(
 
 def revoke(user_id: int, share_id: int) -> None:
     with get_session() as session:
-        share = session.get(ApplicationShare, share_id)
-        if share is None or share.user_id != user_id:
-            raise ShareError("Share not found.")
+        share = require_owned(session, ApplicationShare, share_id, user_id, ShareError, "Share not found.")
         if share.revoked_at is None:
             share.revoked_at = datetime.utcnow()
             session.commit()

@@ -1,8 +1,4 @@
-from . import job_analyzer
-from . import company_analyzer
-from . import salary_analyzer
-from . import report_generator
-from . import orchestrator
+from . import company_analyzer, job_analyzer, orchestrator, report_generator, salary_analyzer
 
 __all__ = [
     'job_analyzer',

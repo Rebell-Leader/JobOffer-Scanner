@@ -79,7 +79,10 @@ class WebhookCrudTests(unittest.TestCase):
 
     def test_set_active_and_delete_cross_user_blocked(self):
         from services.webhooks import (
-            WebhookError, delete_webhook, register_webhook, set_active,
+            WebhookError,
+            delete_webhook,
+            register_webhook,
+            set_active,
         )
 
         wh = register_webhook(self.user.id, "https://x.com", ["stage.added"])

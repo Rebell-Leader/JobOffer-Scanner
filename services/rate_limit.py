@@ -23,7 +23,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class _RedisBackend:
             # Roll back the add we just made so a denied attempt doesn't count.
             self._redis.zpopmax(key, 1)
             oldest = self._redis.zrange(key, 0, 0, withscores=True)
-            retry_after = max(0.0, (oldest[0][1] + window - now)) if oldest else window
+            retry_after = max(0.0, (float(oldest[0][1]) + window - now)) if oldest else window
             return RateLimitDecision(allowed=False, retry_after=retry_after)
         return RateLimitDecision(allowed=True, retry_after=0.0)
 
@@ -135,12 +135,7 @@ class RateLimiter:
 
 # Defaults tuned for "hostile but not DoS" — generous enough for forgetful
 # users, strict enough that credential-stuffing or runaway costs get blocked.
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
+from utils.env import env_int as _env_int  # noqa: E402
 
 LOGIN_LIMITER = RateLimiter(
     "login",

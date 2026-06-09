@@ -13,6 +13,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "bcrypt>=4.1.0",
     "beautifulsoup4>=4.13.3",
+    "cryptography>=41.0.0",
     "fastapi>=0.110.0",
     "fpdf2>=2.8.7",
     "langchain>=0.3.19",
@@ -35,6 +36,18 @@ telegram = ["python-telegram-bot>=21.0"]
 worker = ["celery>=5.3.0", "redis>=5.0.0"]
 browser = ["playwright>=1.44.0"]
 pdf = ["fpdf2>=2.7.0"]
+research = ["ddgs>=6.0"]  # keyless DuckDuckGo search for the agentic fallback
+dev = [
+    "ruff>=0.6",
+    # Pin to the 1.x line: CI gates must use a reproducible type-checker, and
+    # mypy 2.x is materially stricter (third-party stub shape changes). Bump
+    # deliberately, re-running the whole `mypy` pass, not via unpinned drift.
+    "mypy>=1.10,<2",
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+    "coverage>=7.5",
+    "types-requests",
+]
 
 # This is an APPLICATION, not an importable library. It's installed (pip
 # install -e . / uv sync) only to pull the dependencies above — the source is
@@ -45,3 +58,34 @@ pdf = ["fpdf2>=2.7.0"]
 # otherwise errors out on our many top-level dirs (agents/, services/, db/, …).
 [tool.setuptools]
 py-modules = []
+
+# --- Quality tooling --------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["migrations/versions"]  # generated-ish; alembic templates
+
+[tool.ruff.lint]
+# F (pyflakes) + E/W (pycodestyle) + I (isort). Pragmatic for an app.
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line length is handled by the formatter, not enforced hard
+    "E741",  # ambiguous var names (l/I) — a few in chart code
+]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true   # langchain/openai/celery/etc. ship no stubs
+# import-untyped fires for libs that *have* stubs (requests) but aren't
+# resolved here; we type-check OUR code, not third-party signatures.
+disable_error_code = ["import-untyped"]
+warn_unused_ignores = false
+check_untyped_defs = false
+# Scope: the app packages we actively maintain types for. Tests + migrations
+# are intentionally excluded (heavy mocking / generated code).
+files = ["services", "utils", "db", "tools", "agents", "api", "bot", "worker"]
+
+[tool.bandit]
+exclude_dirs = ["tests", "migrations", ".venv"]
+

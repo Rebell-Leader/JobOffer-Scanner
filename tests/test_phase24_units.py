@@ -84,10 +84,11 @@ class ResolveIdentityTests(unittest.TestCase):
         _fresh_db()
 
     def test_new_identity_creates_user_and_links(self):
+        from sqlalchemy import select
+
         from db.models import OAuthIdentity, User
         from db.session import get_session
         from services.oauth import resolve_identity
-        from sqlalchemy import select
 
         user = resolve_identity("google", "sub-123", "new@example.com")
         self.assertEqual(user.email, "new@example.com")
@@ -107,15 +108,17 @@ class ResolveIdentityTests(unittest.TestCase):
         self.assertEqual(u1.id, u2.id)
 
     def test_email_match_links_new_identity_to_existing_user(self):
+        from sqlalchemy import select
+
         from db.models import OAuthIdentity
         from db.session import get_session
         from services.auth import register_user
         from services.oauth import resolve_identity
-        from sqlalchemy import select
 
         existing = register_user("shared@example.com", "longenough")
-        # OAuth login with a DIFFERENT provider id but the same email links.
-        resolved = resolve_identity("github", "gh-999", "shared@example.com")
+        # OAuth login with a DIFFERENT provider id but the same VERIFIED email links.
+        resolved = resolve_identity("github", "gh-999", "shared@example.com",
+                                    email_verified=True)
         self.assertEqual(resolved.id, existing.id)
         with get_session() as s:
             idents = s.execute(
@@ -124,11 +127,22 @@ class ResolveIdentityTests(unittest.TestCase):
             self.assertEqual(len(idents), 1)
             self.assertEqual(idents[0].provider, "github")
 
+    def test_unverified_email_refuses_link_to_existing_account(self):
+        # Account-takeover guard: an unverified provider email must NOT auto-link
+        # to a pre-existing local account.
+        from services.auth import register_user
+        from services.oauth import OAuthError, resolve_identity
+
+        register_user("victim@example.com", "longenough")
+        with self.assertRaises(OAuthError):
+            resolve_identity("github", "attacker-1", "victim@example.com",
+                             email_verified=False)
+
     def test_two_providers_same_email_resolve_same_account(self):
         from services.oauth import resolve_identity
 
-        g = resolve_identity("google", "g-1", "same@example.com")
-        h = resolve_identity("github", "h-1", "same@example.com")
+        g = resolve_identity("google", "g-1", "same@example.com", email_verified=True)
+        h = resolve_identity("github", "h-1", "same@example.com", email_verified=True)
         self.assertEqual(g.id, h.id)
 
     def test_missing_email_for_new_identity_raises(self):
@@ -210,31 +224,50 @@ class UserinfoNormaliseTests(unittest.TestCase):
         with mock.patch.object(mod.requests, "get") as get:
             get.return_value = mock.Mock(
                 status_code=200,
-                json=lambda: {"sub": "12345", "email": "g@x.com"},
+                json=lambda: {"sub": "12345", "email": "g@x.com", "email_verified": True},
                 raise_for_status=lambda: None,
             )
             info = mod._fetch_userinfo(cfg, "tok")
-        self.assertEqual(info, {"provider_user_id": "12345", "email": "g@x.com"})
+        self.assertEqual(info, {"provider_user_id": "12345", "email": "g@x.com",
+                                "email_verified": True})
 
-    def test_github_userinfo_with_inline_email(self):
+    def test_google_unverified_email_marked_unverified(self):
+        import services.oauth as mod
+
+        cfg = mod.PROVIDERS["google"]
+        with mock.patch.object(mod.requests, "get") as get:
+            get.return_value = mock.Mock(
+                status_code=200,
+                json=lambda: {"sub": "1", "email": "g@x.com", "email_verified": False},
+                raise_for_status=lambda: None,
+            )
+            info = mod._fetch_userinfo(cfg, "tok")
+        self.assertFalse(info["email_verified"])
+
+    def test_github_inline_email_is_unverified(self):
         import services.oauth as mod
 
         cfg = mod.PROVIDERS["github"]
-        with mock.patch.object(mod.requests, "get") as get:
+        # No verified primary -> the public profile email is accepted but
+        # marked unverified (GitHub /user.email carries no verified flag).
+        with mock.patch.object(mod.requests, "get") as get, \
+             mock.patch.object(mod, "_github_verified_primary_email", return_value=None):
             get.return_value = mock.Mock(
                 status_code=200,
                 json=lambda: {"id": 777, "email": "gh@x.com"},
                 raise_for_status=lambda: None,
             )
             info = mod._fetch_userinfo(cfg, "tok")
-        self.assertEqual(info, {"provider_user_id": "777", "email": "gh@x.com"})
+        self.assertEqual(info, {"provider_user_id": "777", "email": "gh@x.com",
+                                "email_verified": False})
 
-    def test_github_falls_back_to_emails_endpoint(self):
+    def test_github_verified_primary_is_trusted(self):
         import services.oauth as mod
 
         cfg = mod.PROVIDERS["github"]
         with mock.patch.object(mod.requests, "get") as get, \
-             mock.patch.object(mod, "_github_primary_email", return_value="primary@x.com"):
+             mock.patch.object(mod, "_github_verified_primary_email",
+                               return_value="primary@x.com"):
             get.return_value = mock.Mock(
                 status_code=200,
                 json=lambda: {"id": 5, "email": None},
@@ -242,6 +275,22 @@ class UserinfoNormaliseTests(unittest.TestCase):
             )
             info = mod._fetch_userinfo(cfg, "tok")
         self.assertEqual(info["email"], "primary@x.com")
+        self.assertTrue(info["email_verified"])
+
+    def test_github_verified_primary_filters_unverified(self):
+        import services.oauth as mod
+
+        # _github_verified_primary_email returns ONLY a verified primary.
+        with mock.patch.object(mod.requests, "get") as get:
+            get.return_value = mock.Mock(
+                status_code=200,
+                json=lambda: [
+                    {"email": "unverified@x.com", "primary": True, "verified": False},
+                    {"email": "other@x.com", "primary": False, "verified": True},
+                ],
+                raise_for_status=lambda: None,
+            )
+            self.assertIsNone(mod._github_verified_primary_email("tok"))
 
 
 # ---------------------------------------------------------------------------

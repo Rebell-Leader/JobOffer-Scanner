@@ -1,12 +1,12 @@
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from agents.orchestrator import run_analysis
-from db.models import APPLICATION_STATUSES
+from db.models import APPLICATION_STATUSES, PIPELINE_STAGES
 from db.session import init_db
 from services.analysis_runner import async_enabled
 from services.analytics import compute_dashboard
@@ -19,17 +19,21 @@ from services.applications import (
     save_analysis,
     update_status,
 )
+from services.auth import (
+    AuthError,
+    authenticate_user,
+    change_password,
+    complete_password_reset,
+    register_user,
+    request_password_reset,
+)
 from services.background_analysis import (
     BackgroundAnalysisError,
-    delete as delete_background_analysis,
-    list_for_user as list_background_analyses,
     refresh_all_pending,
     submit_background_analysis,
 )
-from services.checkpoint import (
-    CHECKPOINT_STAGES,
-    compute_key as compute_checkpoint_key,
-    get_store as get_checkpoint_store,
+from services.background_analysis import (
+    delete as delete_background_analysis,
 )
 from services.bulk_import import (
     BulkImportError,
@@ -40,6 +44,14 @@ from services.bulk_import import (
     save_applications,
     save_projects,
 )
+from services.checkpoint import (
+    compute_key as compute_checkpoint_key,
+)
+from services.checkpoint import (
+    get_store as get_checkpoint_store,
+)
+from services.constraint_check import ConstraintCheck
+from services.constraint_check import summarize as summarize_check
 from services.master_cv import (
     MasterCVError,
     delete_master_cv,
@@ -52,12 +64,23 @@ from services.master_cv import (
     save_master_cv,
     save_master_cv_from_upload,
 )
+from services.notifications import (
+    notify_stage_added,
+    send_password_reset_email,
+)
+from services.pdf_export import PDFExportError, markdown_to_pdf
 from services.projects import (
     ProjectError,
     create_project,
     delete_project,
     list_projects,
     update_project,
+)
+from services.rate_limit import RateLimitExceeded
+from services.reminders import (
+    set_inactive_threshold,
+    snooze_application,
+    unsnooze_application,
 )
 from services.stages import (
     QUICK_ACTIONS,
@@ -66,8 +89,6 @@ from services.stages import (
     delete_stage,
     list_stages,
 )
-from services.constraint_check import ConstraintCheck, summarize as summarize_check
-from services.pdf_export import PDFExportError, markdown_to_pdf
 from services.suggestions import (
     apply_skill_addition,
     build_suggestions,
@@ -81,43 +102,6 @@ from services.tailoring import (
     list_artifacts,
     recheck_artifact,
 )
-from services.auth import (
-    AuthError,
-    authenticate_user,
-    change_password,
-    complete_password_reset,
-    register_user,
-    request_password_reset,
-)
-from services.notifications import (
-    notify_stage_added,
-    send_password_reset_email,
-)
-from services.webhooks import (
-    WebhookError,
-    delete_webhook,
-    dispatch_event_background,
-    list_deliveries as list_webhook_deliveries,
-    list_webhooks,
-    register_webhook,
-    set_active as set_webhook_active,
-)
-from services.totp import (
-    TOTPError,
-    confirm_setup as totp_confirm_setup,
-    disable as totp_disable,
-    is_enabled as totp_is_enabled,
-    pending_setup as totp_pending_setup,
-    remaining_backup_codes as totp_backup_codes_left,
-    start_setup as totp_start_setup,
-    verify_login as totp_verify_login,
-)
-from services.rate_limit import RateLimitExceeded
-from services.reminders import (
-    set_inactive_threshold,
-    snooze_application,
-    unsnooze_application,
-)
 from services.telegram_link import (
     TelegramLinkError,
     get_link,
@@ -125,16 +109,50 @@ from services.telegram_link import (
     set_notify_on_stage,
     unlink,
 )
-from tools.resume_tools import extract_resume_text
-from tools.url_ingest import fetch_job_posting, is_url
 from services.timeline import (
     STAGE_COLORS,
     cross_application_swimlane,
     per_application_timeline,
     points_to_records,
 )
+from services.totp import (
+    TOTPError,
+)
+from services.totp import (
+    confirm_setup as totp_confirm_setup,
+)
+from services.totp import (
+    disable as totp_disable,
+)
+from services.totp import (
+    is_enabled as totp_is_enabled,
+)
+from services.totp import (
+    remaining_backup_codes as totp_backup_codes_left,
+)
+from services.totp import (
+    start_setup as totp_start_setup,
+)
+from services.totp import (
+    verify_login as totp_verify_login,
+)
+from services.webhooks import (
+    WebhookError,
+    delete_webhook,
+    list_webhooks,
+    register_webhook,
+)
+from services.webhooks import (
+    list_deliveries as list_webhook_deliveries,
+)
+from services.webhooks import (
+    set_active as set_webhook_active,
+)
+from tools.resume_tools import extract_resume_text
+from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
+from utils.env import env_bool
 from utils.logging_setup import configure as configure_logging
 
 # Page config
@@ -142,6 +160,10 @@ st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layo
 
 configure_logging()
 print_environment_status()
+if not st.session_state.get("_config_logged"):
+    from utils.config import log_effective_config
+    log_effective_config()
+    st.session_state["_config_logged"] = True
 init_db()
 
 
@@ -270,7 +292,7 @@ def _render_oauth_buttons() -> None:
             st.session_state.oauth_provider = provider
             url = build_authorize_url(provider, state)
             label = {"google": "Google", "github": "GitHub"}.get(provider, provider)
-            st.link_button(f"Sign in with {label}", url, use_container_width=True)
+            st.link_button(f"Sign in with {label}", url, width="stretch")
     st.divider()
 
 
@@ -356,7 +378,16 @@ def render_auth() -> None:
                     user = register_user(email, password)
                     st.session_state.user_id = user.id
                     st.session_state.user_email = user.email
-                    st.success("Account created. Signing you in...")
+                    # Kick off email verification (best-effort delivery).
+                    try:
+                        from services.email_verify import start_verification
+                        from services.notifications import send_verification_email
+                        tok = start_verification(user.id)
+                        if tok is not None:
+                            send_verification_email(user.email, tok)
+                    except Exception:  # noqa: BLE001 - never block signup
+                        pass
+                    st.success("Account created. Check your email to verify it.")
                     st.rerun()
                 except RateLimitExceeded as exc:
                     st.error(str(exc))
@@ -373,11 +404,13 @@ def render_auth() -> None:
                     if token is not None:
                         # Best-effort email delivery (no-op if SMTP unconfigured).
                         send_password_reset_email(forgot_email, token)
-                        # Self-hosted operator convenience.
-                        if os.getenv("RESET_TOKEN_SURFACE_IN_UI") == "1":
+                        # Self-hosted operator convenience — BOTH the UI display
+                        # and the log line are gated on the same opt-in flag so a
+                        # production deploy never leaks reset tokens to stdout/logs.
+                        if env_bool("RESET_TOKEN_SURFACE_IN_UI"):
                             st.code(token, language=None)
                             st.caption("RESET_TOKEN_SURFACE_IN_UI=1 — disable in production.")
-                        print(f"[auth] reset token for {forgot_email}: {token}")
+                            print(f"[auth] reset token for {forgot_email}: {token}")
                     # Always the same notice — never reveal whether the email exists.
                     st.info(_RESET_GENERIC_NOTICE)
                 except RateLimitExceeded as exc:
@@ -405,6 +438,74 @@ if "user_id" not in st.session_state:
 
 
 # ---------------------------------------------------------------------------
+# Email-verification gate / banner
+# ---------------------------------------------------------------------------
+
+def _render_verification_gate() -> None:
+    """Show a verify-your-email banner for unverified accounts.
+
+    Always informational; when REQUIRE_EMAIL_VERIFICATION=1 it hard-blocks the
+    app (st.stop) until the user verifies — otherwise it's a dismissible-by-
+    verifying banner that doesn't impede usage (so the live deploy isn't
+    broken for existing/unverified users).
+    """
+    from services.email_verify import (
+        EmailVerifyError,
+        complete_verification,
+        is_verified,
+        start_verification,
+    )
+
+    if is_verified(st.session_state.user_id):
+        return
+
+    hard_gate = env_bool("REQUIRE_EMAIL_VERIFICATION")
+    box = st.warning if hard_gate else st.info
+    box(
+        "📧 Please verify your email"
+        + (" to use the app." if hard_gate else " — check your inbox for the link.")
+    )
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        if st.button("Resend email"):
+            try:
+                from services.notifications import send_verification_email
+                tok = start_verification(st.session_state.user_id)
+                if tok is not None:
+                    send_verification_email(st.session_state.user_email, tok)
+                st.success("Verification email sent.")
+            except (EmailVerifyError, RateLimitExceeded) as exc:
+                st.error(str(exc))
+    with col_b:
+        with st.form("verify_email_form"):
+            code = st.text_input("Verification token", key="verify_token_input")
+            if st.form_submit_button("Verify"):
+                try:
+                    complete_verification(st.session_state.user_email, code)
+                    st.success("Email verified. Thank you!")
+                    st.rerun()
+                except EmailVerifyError as exc:
+                    st.error(str(exc))
+    if hard_gate:
+        st.stop()
+
+
+# Consume a ?verify_token= deep link (from the emailed link) before rendering.
+_vt = st.query_params.get("verify_token")
+if _vt:
+    from services.email_verify import EmailVerifyError as _EVErr
+    from services.email_verify import complete_verification as _cv
+    try:
+        _cv(st.session_state.user_email, _vt)
+        st.success("Email verified. Thank you!")
+    except _EVErr as exc:
+        st.error(str(exc))
+    st.query_params.pop("verify_token", None)
+
+_render_verification_gate()
+
+
+# ---------------------------------------------------------------------------
 # Authenticated layout
 # ---------------------------------------------------------------------------
 
@@ -424,8 +525,14 @@ with st.sidebar.expander("📜 My recent activity"):
 with st.sidebar.expander("🔑 API tokens"):
     from services.api_tokens import (
         ApiTokenError,
+    )
+    from services.api_tokens import (
         issue as issue_api_token,
+    )
+    from services.api_tokens import (
         list_for_user as list_api_tokens,
+    )
+    from services.api_tokens import (
         revoke as revoke_api_token,
     )
     st.caption(
@@ -468,7 +575,7 @@ with st.sidebar.expander("🔑 API tokens"):
         for t in tokens:
             status = (
                 "revoked" if t.revoked_at else
-                "expired" if t.expires_at and t.expires_at <= __import__("datetime").datetime.utcnow() else
+                "expired" if t.expires_at and t.expires_at <= datetime.utcnow() else
                 "active"
             )
             cols = st.columns([4, 1])
@@ -565,6 +672,7 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
         else:
             try:
                 import io
+
                 import qrcode
 
                 img = qrcode.make(st.session_state.totp_setup_uri)
@@ -603,6 +711,49 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
             if st.button("I've saved them — hide"):
                 st.session_state.pop("totp_backup_codes_once", None)
                 st.rerun()
+
+with st.sidebar.expander("🗄 Privacy & account"):
+    from services.account_export import export_json
+    from services.auth import AuthError as _AuthError
+    from services.auth import delete_account
+
+    st.caption("Download everything we hold about you, or delete your account.")
+    st.download_button(
+        "⬇️ Download all my data (JSON)",
+        data=export_json(st.session_state.user_id),
+        file_name="my_joboffer_data.json",
+        mime="application/json",
+        key="account_export_btn",
+    )
+
+    st.markdown("---")
+    st.markdown("**Danger zone**")
+    if not st.session_state.get("account_delete_armed"):
+        if st.button("Delete my account…"):
+            st.session_state["account_delete_armed"] = True
+            st.rerun()
+    else:
+        st.warning(
+            "This permanently deletes your account and ALL data (applications, "
+            "CV, artifacts, tokens). This cannot be undone."
+        )
+        with st.form("delete_account_form"):
+            del_pw = st.text_input("Confirm current password", type="password")
+            col_d, col_c = st.columns(2)
+            do_delete = col_d.form_submit_button("Permanently delete", type="primary")
+            cancel = col_c.form_submit_button("Cancel")
+        if cancel:
+            st.session_state.pop("account_delete_armed", None)
+            st.rerun()
+        if do_delete:
+            try:
+                delete_account(st.session_state.user_id, del_pw)
+                # Wipe the session entirely and return to the auth gate.
+                for key in list(st.session_state.keys()):
+                    st.session_state.pop(key, None)
+                st.rerun()
+            except _AuthError as exc:
+                st.error(str(exc))
 
 with st.sidebar.expander("🔒 Change password"):
     with st.form("change_pw_form"):
@@ -693,7 +844,7 @@ else:
 
 # Sign out lives at the bottom so it isn't the second sidebar click target.
 st.sidebar.markdown("---")
-if st.sidebar.button("Sign out", use_container_width=True):
+if st.sidebar.button("Sign out", width="stretch"):
     for key in ("user_id", "user_email", "last_result", "last_inputs"):
         st.session_state.pop(key, None)
     st.rerun()
@@ -964,12 +1115,14 @@ with analyze_tab:
             }
             selected_model = "detailed" if "Detailed" in model_choice else "fast"
 
-            # Quota check — runs BEFORE the LLM does any work.
+            # Quota check — runs BEFORE the LLM does any work. Covers both the
+            # request-count rate limit and the rolling spend budget.
             from services.analysis_runner import check_user_quota
             from services.rate_limit import RateLimitExceeded
+            from services.usage import BudgetExceeded
             try:
                 check_user_quota(st.session_state.user_id)
-            except RateLimitExceeded as exc:
+            except (RateLimitExceeded, BudgetExceeded) as exc:
                 st.error(str(exc))
                 st.stop()
 
@@ -1041,7 +1194,9 @@ with analyze_tab:
                         "re-run."
                     )
 
-            with st.spinner("Analyzing job posting..."):
+            from services.usage import account as _account_usage
+            with st.spinner("Analyzing job posting..."), \
+                    _account_usage(st.session_state.user_id):
                 result = run_analysis(
                     posting_text,
                     job_data,
@@ -1091,23 +1246,14 @@ with analyze_tab:
                 save_notes = st.text_input("Notes (optional)", "")
             if st.form_submit_button("💾 Save analysis", type="primary"):
                 try:
-                    saved_rec = save_analysis(
+                    save_analysis(
                         user_id=st.session_state.user_id,
                         manual_inputs=st.session_state.last_inputs,
                         analysis_result=st.session_state.last_result,
                         status=save_status,
                         notes=save_notes or None,
                     )
-                    dispatch_event_background(
-                        st.session_state.user_id, "application.saved",
-                        {
-                            "application_id": saved_rec.id,
-                            "company_name": saved_rec.company_name,
-                            "job_title": saved_rec.job_title,
-                            "verdict": saved_rec.verdict,
-                            "status": saved_rec.status,
-                        },
-                    )
+                    # The application.saved webhook now fires inside save_analysis.
                     st.success("Saved to My Applications.")
                 except ApplicationError as exc:
                     st.error(str(exc))
@@ -1381,7 +1527,7 @@ with applications_tab:
                     )
                     st.altair_chart(
                         (line + dots).properties(height=180),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                 # ----- Pipeline stages -----
@@ -1417,18 +1563,9 @@ with applications_tab:
                                 st.session_state.user_id, rec.id, kind=kind,
                             )
                             # Best-effort Telegram notification — never raises.
+                            # (The stage.added webhook fires inside add_stage.)
                             notify_stage_added(
                                 st.session_state.user_id, rec, new_stage,
-                            )
-                            dispatch_event_background(
-                                st.session_state.user_id, "stage.added",
-                                {
-                                    "application_id": rec.id,
-                                    "company_name": rec.company_name,
-                                    "job_title": rec.job_title,
-                                    "stage": kind,
-                                    "occurred_on": new_stage.occurred_on.isoformat(),
-                                },
                             )
                             st.rerun()
                         except StageError as exc:
@@ -1446,7 +1583,7 @@ with applications_tab:
                         at_pipeline = st.selectbox(
                             "If terminal (rejected/withdrew/ghosted): at which pipeline stage?",
                             ["(none)"] + list(
-                                __import__("db.models", fromlist=["PIPELINE_STAGES"]).PIPELINE_STAGES
+                                PIPELINE_STAGES
                             ),
                             key=f"stage_at_{rec.id}",
                         )
@@ -1470,16 +1607,7 @@ with applications_tab:
                                 notify_stage_added(
                                     st.session_state.user_id, rec, new_stage,
                                 )
-                                dispatch_event_background(
-                                    st.session_state.user_id, "stage.added",
-                                    {
-                                        "application_id": rec.id,
-                                        "company_name": rec.company_name,
-                                        "job_title": rec.job_title,
-                                        "stage": new_stage.kind,
-                                        "occurred_on": new_stage.occurred_on.isoformat(),
-                                    },
-                                )
+                                # stage.added webhook fires inside add_stage.
                                 st.success("Stage added.")
                                 st.rerun()
                             except StageError as exc:
@@ -1725,6 +1853,8 @@ with applications_tab:
                     ShareError,
                     create_share,
                     list_shares_for_application,
+                )
+                from services.sharing import (
                     revoke as revoke_share,
                 )
                 if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):
@@ -1769,7 +1899,7 @@ with applications_tab:
                             status = "active"
                             if s.revoked_at:
                                 status = "revoked"
-                            elif s.expires_at and s.expires_at <= __import__("datetime").datetime.utcnow():
+                            elif s.expires_at and s.expires_at <= datetime.utcnow():
                                 status = "expired"
                             col_info, col_act = st.columns([4, 1])
                             with col_info:
@@ -1886,7 +2016,7 @@ with analytics_tab:
                     for v in dash.verdict_outcomes
                 ],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(
                 "Correlation isn't causation — but a consistent gap between "
@@ -1952,7 +2082,7 @@ with analytics_tab:
             chart_height = max(180, row_height * len(label_order) + 60)
             st.altair_chart(
                 (line_per_app + dots_per_app).properties(height=chart_height),
-                use_container_width=True,
+                width="stretch",
             )
 
 

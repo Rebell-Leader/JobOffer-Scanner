@@ -28,13 +28,15 @@ import os
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from utils.env import env_bool
+
 
 def _csp() -> str:
     return os.getenv("API_CSP", "default-src 'none'; frame-ancestors 'none'")
 
 
 def _hsts_value() -> str | None:
-    if os.getenv("API_ENABLE_HSTS") != "1":
+    if not env_bool("API_ENABLE_HSTS"):
         return None
     max_age = os.getenv("API_HSTS_MAX_AGE", "63072000")
     return f"max-age={max_age}; includeSubDomains"

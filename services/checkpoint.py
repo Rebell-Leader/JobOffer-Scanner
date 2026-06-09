@@ -24,9 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
+
+from utils.env import env_int
+
+logger = logging.getLogger(__name__)
 
 
 # What stages of the orchestrator write checkpointable output. Order here
@@ -103,18 +109,99 @@ class CheckpointStore:
             self._data.clear()
 
 
-# Module-level singleton — same lifecycle as the Python process. Streamlit
-# session lifecycle is bigger than the process for ``--server.runOnSave``
-# reloads, but a reload is exactly when we'd WANT to drop the cache anyway.
-_store = CheckpointStore()
+class RedisCheckpointStore:
+    """Redis-backed checkpoint store so a retry can land on a different replica
+    and still resume completed stages. Each key is a Redis hash (stage ->
+    JSON) with a TTL so abandoned checkpoints self-expire.
+    """
+
+    _NS = "joc:ckpt:"
+    _TTL = env_int("CHECKPOINT_TTL_SECONDS", 3600)
+
+    def __init__(self, url: str) -> None:
+        import redis  # lazy
+
+        self._r = redis.from_url(url, decode_responses=True)
+
+    def _k(self, key: str) -> str:
+        return f"{self._NS}{key}"
+
+    def get(self, key: str) -> CheckpointPayload:
+        payload = CheckpointPayload()
+        try:
+            raw = self._r.hgetall(self._k(key))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore get failed: %s", exc)
+            return payload
+        for stage, val in (raw or {}).items():
+            try:
+                payload.stages[str(stage)] = json.loads(val)
+            except (TypeError, ValueError):
+                continue
+        return payload
+
+    def has(self, key: str) -> bool:
+        try:
+            return bool(self._r.exists(self._k(key)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore has failed: %s", exc)
+            return False
+
+    def set(self, key: str, stage: str, value: Any) -> None:
+        try:
+            self._r.hset(self._k(key), stage, json.dumps(value, default=str))
+            self._r.expire(self._k(key), self._TTL)
+        except (TypeError, ValueError):
+            return  # unserialisable — skip
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore set failed: %s", exc)
+
+    def completed_stages(self, key: str) -> Tuple[str, ...]:
+        try:
+            present = set(self._r.hkeys(self._k(key)) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore completed_stages failed: %s", exc)
+            return ()
+        return tuple(s for s in CHECKPOINT_STAGES if s in present)
+
+    def clear(self, key: str) -> None:
+        try:
+            self._r.delete(self._k(key))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore clear failed: %s", exc)
+
+    def reset(self) -> None:
+        try:
+            for k in self._r.scan_iter(f"{self._NS}*"):
+                self._r.delete(k)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RedisCheckpointStore reset failed: %s", exc)
 
 
-def get_store() -> CheckpointStore:
+def _build_store():
+    url = os.getenv("REDIS_URL") or os.getenv("CELERY_BROKER_URL")
+    if url and url.startswith(("redis://", "rediss://")):
+        try:
+            store = RedisCheckpointStore(url)
+            logger.info("Using Redis checkpoint store.")
+            return store
+        except Exception as exc:  # noqa: BLE001 - degrade to in-memory
+            logger.warning("Redis checkpoint store unavailable (%s); in-memory.", exc)
+    return CheckpointStore()
+
+
+# Module-level singleton — built once at import from the environment.
+_store = _build_store()
+
+
+def get_store():
     return _store
 
 
 def reset_store_for_testing() -> None:
-    _store.reset()
+    """Reset to a fresh in-memory store (tests never use Redis)."""
+    global _store
+    _store = CheckpointStore()
 
 
 def compute_key(

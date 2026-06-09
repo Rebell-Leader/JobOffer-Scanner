@@ -85,6 +85,8 @@ class PasswordResetTests(unittest.TestCase):
             complete_password_reset("p@x.com", token, "anotherpw")
 
     def test_expired_token_rejected(self):
+        from sqlalchemy import select
+
         from db.models import PasswordResetToken
         from db.session import get_session
         from services.auth import (
@@ -92,7 +94,6 @@ class PasswordResetTests(unittest.TestCase):
             complete_password_reset,
             request_password_reset,
         )
-        from sqlalchemy import select
 
         token = request_password_reset("p@x.com")
         # Hand-expire the token.
@@ -115,10 +116,11 @@ class PasswordResetTests(unittest.TestCase):
             complete_password_reset("p@x.com", "totally-wrong-token", "brandnewpw")
 
     def test_token_hash_not_raw_in_db(self):
+        from sqlalchemy import select
+
         from db.models import PasswordResetToken
         from db.session import get_session
         from services.auth import request_password_reset
-        from sqlalchemy import select
 
         token = request_password_reset("p@x.com")
         with get_session() as s:

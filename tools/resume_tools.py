@@ -18,11 +18,11 @@ from __future__ import annotations
 import io
 import logging
 import re
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 from utils.cache import cache
 from utils.llm import get_completion
-from utils.security import sanitize_untrusted, wrap_untrusted
+from utils.security import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 

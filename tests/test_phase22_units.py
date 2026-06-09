@@ -69,6 +69,7 @@ class ApiTokenIssueTests(unittest.TestCase):
 
     def test_list_newest_first(self):
         import time
+
         from services.api_tokens import issue, list_for_user
 
         issue(self.user.id, "a")
@@ -125,8 +126,7 @@ class ApiTokenVerifyTests(unittest.TestCase):
         self.assertIsNone(verify("   "))
 
     def test_verify_rejects_revoked(self):
-        from services.api_tokens import revoke, verify
-        from services.api_tokens import list_for_user
+        from services.api_tokens import list_for_user, revoke, verify
 
         token_id = list_for_user(self.user.id)[0].id
         revoke(self.user.id, token_id)
@@ -174,6 +174,7 @@ class ApiEndpointTests(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
+
         from api.main import create_app
 
         return TestClient(create_app())
@@ -317,7 +318,7 @@ class ApiEndpointTests(unittest.TestCase):
             "salary_analysis": {"y": 2},
             "resume_analysis": {},
         }
-        with mock.patch.object(routes_mod, "run_analysis", return_value=fake_result):
+        with mock.patch.object(routes_mod, "run_analysis_sync", return_value=fake_result):
             client = self._client()
             r = client.post(
                 "/v1/analyze",
@@ -347,7 +348,7 @@ class ApiEndpointTests(unittest.TestCase):
             },
             "company_analysis": {}, "salary_analysis": {}, "resume_analysis": {},
         }
-        with mock.patch.object(routes_mod, "run_analysis", return_value=fake_result):
+        with mock.patch.object(routes_mod, "run_analysis_sync", return_value=fake_result):
             client = self._client()
             r = client.post(
                 "/v1/analyze",
@@ -368,7 +369,7 @@ class ApiEndpointTests(unittest.TestCase):
     def test_post_analyze_propagates_pipeline_error(self):
         import api.routes as routes_mod
 
-        with mock.patch.object(routes_mod, "run_analysis",
+        with mock.patch.object(routes_mod, "run_analysis_sync",
                                return_value={"error": "LLM hung up"}):
             client = self._client()
             r = client.post(
@@ -377,6 +378,32 @@ class ApiEndpointTests(unittest.TestCase):
             )
         self.assertEqual(r.status_code, 502)
         self.assertIn("LLM hung up", r.json()["detail"])
+
+    def test_post_analyze_rate_limited_returns_429(self):
+        import api.routes as routes_mod
+        from services.rate_limit import RateLimitExceeded
+
+        with mock.patch.object(routes_mod, "check_user_quota",
+                               side_effect=RateLimitExceeded(42.0)), \
+             mock.patch.object(routes_mod, "run_analysis_sync") as run:
+            client = self._client()
+            r = client.post("/v1/analyze", headers=self._auth(),
+                            json={"job_posting": "hello"})
+        self.assertEqual(r.status_code, 429)
+        run.assert_not_called()  # blocked before any pipeline work
+
+    def test_post_analyze_over_budget_returns_402(self):
+        import api.routes as routes_mod
+        from services.usage import BudgetExceeded
+
+        with mock.patch.object(routes_mod, "check_user_quota",
+                               side_effect=BudgetExceeded(5.0, 1.0)), \
+             mock.patch.object(routes_mod, "run_analysis_sync") as run:
+            client = self._client()
+            r = client.post("/v1/analyze", headers=self._auth(),
+                            json={"job_posting": "hello"})
+        self.assertEqual(r.status_code, 402)
+        run.assert_not_called()
 
     def test_analytics_endpoint_returns_full_shape(self):
         client = self._client()

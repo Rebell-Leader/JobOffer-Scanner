@@ -190,7 +190,7 @@ def compute_funnel(data) -> List[FunnelRow]:
     ``recruiter_screen`` but two logged ``phone_screen``, phone_screen's
     conversion is computed against ``applied``, not against 0.
     """
-    counts = Counter()
+    counts: Counter = Counter()
     for _, stages in data:
         kinds = _stage_kinds_seen(stages)
         for stage in PIPELINE_STAGES:

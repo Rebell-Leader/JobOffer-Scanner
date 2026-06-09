@@ -38,10 +38,11 @@ from db.models import OAuthIdentity
 from db.session import get_session
 from services.audit import record as _audit
 from services.auth import AuthedUser, create_oauth_user, find_user_by_email
+from utils.env import env_float
 
 logger = logging.getLogger(__name__)
 
-_HTTP_TIMEOUT = float(os.getenv("OAUTH_HTTP_TIMEOUT", "10"))
+_HTTP_TIMEOUT = env_float("OAUTH_HTTP_TIMEOUT", 10.0)
 
 
 class OAuthError(ValueError):
@@ -155,8 +156,21 @@ def _exchange_code(cfg: ProviderConfig, code: str) -> str:
     return token
 
 
+def _as_bool(value) -> bool:
+    """Coerce a provider claim (bool or "true"/"1"/"yes") to a real bool."""
+    return value is True or str(value).strip().lower() in {"true", "1", "yes"}
+
+
 def _fetch_userinfo(cfg: ProviderConfig, access_token: str) -> dict:
-    """Fetch the user's profile; normalise to {provider_user_id, email}."""
+    """Fetch the user's profile; normalise to {provider_user_id, email,
+    email_verified}.
+
+    ``email_verified`` reflects whether the PROVIDER asserts the address is
+    verified — Google's OIDC ``email_verified`` claim, or (GitHub) a verified
+    primary from ``/user/emails``. It gates auto-linking to a pre-existing
+    local account (see ``resolve_identity``), so an attacker can't take over an
+    account by pointing an unverified provider email at it.
+    """
     resp = requests.get(
         cfg.userinfo_url,
         headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
@@ -166,17 +180,33 @@ def _fetch_userinfo(cfg: ProviderConfig, access_token: str) -> dict:
     info = resp.json()
 
     if cfg.name == "google":
-        return {"provider_user_id": str(info.get("sub")), "email": info.get("email")}
+        return {
+            "provider_user_id": str(info.get("sub")),
+            "email": info.get("email"),
+            "email_verified": _as_bool(info.get("email_verified")),
+        }
     if cfg.name == "github":
-        email = info.get("email")
-        if not email:
-            # GitHub may hide the primary email from /user; fetch /user/emails.
-            email = _github_primary_email(access_token)
-        return {"provider_user_id": str(info.get("id")), "email": email}
-    return {"provider_user_id": str(info.get("id") or info.get("sub")), "email": info.get("email")}
+        # GitHub's /user.email carries no verified flag, so always consult
+        # /user/emails for a VERIFIED primary. Only that path is trusted as
+        # verified; the public profile email is accepted but unverified.
+        verified = _github_verified_primary_email(access_token)
+        if verified:
+            return {"provider_user_id": str(info.get("id")), "email": verified,
+                    "email_verified": True}
+        return {"provider_user_id": str(info.get("id")), "email": info.get("email"),
+                "email_verified": False}
+    return {"provider_user_id": str(info.get("id") or info.get("sub")),
+            "email": info.get("email"),
+            "email_verified": _as_bool(info.get("email_verified"))}
 
 
-def _github_primary_email(access_token: str) -> Optional[str]:
+def _github_verified_primary_email(access_token: str) -> Optional[str]:
+    """Return the user's VERIFIED primary GitHub email, or None.
+
+    Deliberately returns None (rather than an unverified fallback) when no
+    verified primary exists — an unverified address must not be treated as
+    proof of ownership.
+    """
     try:
         resp = requests.get(
             "https://api.github.com/user/emails",
@@ -185,11 +215,10 @@ def _github_primary_email(access_token: str) -> Optional[str]:
         )
         resp.raise_for_status()
         emails = resp.json()
-        primary = next(
+        return next(
             (e["email"] for e in emails if e.get("primary") and e.get("verified")),
             None,
         )
-        return primary or (emails[0]["email"] if emails else None)
     except Exception as exc:  # noqa: BLE001
         logger.warning("GitHub email fetch failed: %s", exc)
         return None
@@ -201,13 +230,19 @@ def _github_primary_email(access_token: str) -> Optional[str]:
 
 def resolve_identity(
     provider: str, provider_user_id: str, email: Optional[str],
+    email_verified: bool = False,
 ) -> AuthedUser:
     """Map an external identity to a local account, linking/creating as needed.
 
     Resolution order:
       1. Existing OAuthIdentity row -> that user (audit: oauth.login).
-      2. Email matches an existing user -> link a new identity (oauth.link).
-      3. Otherwise -> create a new user + identity (oauth.register).
+      2. Email matches an existing user -> link a new identity (oauth.link),
+         but ONLY if the provider asserts the email is verified. Auto-linking
+         on an UNVERIFIED email is an account-takeover vector (an attacker sets
+         their provider email to the victim's address), so we refuse it and
+         tell the user to link from settings after a password login.
+      3. Otherwise -> create a new user + identity (oauth.register), recording
+         the provider's verification status on the new account.
     """
     if not provider_user_id:
         raise OAuthError("Provider did not return a stable user id.")
@@ -234,11 +269,20 @@ def resolve_identity(
 
     existing = find_user_by_email(email)
     if existing is not None:
+        if not email_verified:
+            _audit("user.oauth.link_refused", user_id=existing.id,
+                   details={"provider": provider, "reason": "unverified_email"})
+            raise OAuthError(
+                "An account already exists for this email. For your security we "
+                f"won't link {provider} to it from an unverified email. Sign in "
+                "with your password, then link the provider from account settings "
+                "(or verify the email with the provider first)."
+            )
         _link_identity(existing.id, provider, provider_user_id, email)
         _audit("user.oauth.link", user_id=existing.id, details={"provider": provider})
         return existing
 
-    created = create_oauth_user(email)
+    created = create_oauth_user(email, email_verified=email_verified)
     _link_identity(created.id, provider, provider_user_id, email)
     _audit("user.oauth.register", user_id=created.id, details={"provider": provider})
     return created
@@ -271,4 +315,7 @@ def complete_login(provider: str, code: str) -> AuthedUser:
         raise
     except Exception as exc:  # noqa: BLE001
         raise OAuthError(f"{cfg.label} sign-in failed: {exc}") from exc
-    return resolve_identity(provider, info["provider_user_id"], info.get("email"))
+    return resolve_identity(
+        provider, info["provider_user_id"], info.get("email"),
+        email_verified=bool(info.get("email_verified")),
+    )

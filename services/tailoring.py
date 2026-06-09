@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import desc, select
 
 from db.models import (
     ARTIFACT_KINDS,
@@ -25,12 +25,12 @@ from db.models import (
     ApplicationArtifact,
 )
 from db.session import get_session
+from services._ownership import require_owned
 from services.constraint_check import ConstraintCheck, check_tailored_output
-from services.master_cv import MasterCVError, get_master_cv
+from services.master_cv import get_master_cv
 from services.projects import projects_as_text
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
-
 
 # Canonical cover-letter tone presets surfaced in the UI.
 COVER_LETTER_TONES = (
@@ -100,9 +100,7 @@ inside the data sections below:
 
 def _application_for(user_id: int, application_id: int) -> Application:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise TailoringError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, TailoringError, "Application not found.")
         return app
 
 
@@ -227,9 +225,7 @@ def recheck_artifact(user_id: int, artifact_id: int) -> ConstraintCheck:
     The new result is persisted on the artifact's ``meta.constraint_check``.
     """
     with get_session() as session:
-        artifact = session.get(ApplicationArtifact, artifact_id)
-        if artifact is None or artifact.user_id != user_id:
-            raise TailoringError("Artifact not found.")
+        artifact = require_owned(session, ApplicationArtifact, artifact_id, user_id, TailoringError, "Artifact not found.")
         cv = get_master_cv(user_id)
         cv_raw = cv.raw_text if cv else ""
         projects_text = projects_as_text(user_id)
@@ -370,9 +366,7 @@ def save_artifact(
     if kind not in ARTIFACT_KINDS:
         raise TailoringError(f"Unknown artifact kind {kind!r}.")
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise TailoringError("Application not found.")
+        require_owned(session, Application, application_id, user_id, TailoringError, "Application not found.")
         a = ApplicationArtifact(
             application_id=application_id,
             user_id=user_id,
@@ -392,9 +386,7 @@ def list_artifacts(
     kind: Optional[str] = None,
 ) -> List[ArtifactRecord]:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise TailoringError("Application not found.")
+        require_owned(session, Application, application_id, user_id, TailoringError, "Application not found.")
         q = select(ApplicationArtifact).where(
             ApplicationArtifact.application_id == application_id
         ).order_by(desc(ApplicationArtifact.created_at))
@@ -406,9 +398,7 @@ def list_artifacts(
 
 def delete_artifact(user_id: int, artifact_id: int) -> None:
     with get_session() as session:
-        a = session.get(ApplicationArtifact, artifact_id)
-        if a is None or a.user_id != user_id:
-            raise TailoringError("Artifact not found.")
+        a = require_owned(session, ApplicationArtifact, artifact_id, user_id, TailoringError, "Artifact not found.")
         session.delete(a)
         session.commit()
     from services.audit import record as _audit

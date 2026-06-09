@@ -8,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -109,10 +108,11 @@ class SetupTests(unittest.TestCase):
 
     def test_secret_persisted_as_base32(self):
         """Stored secret must be the same one pyotp can generate codes from."""
+        from sqlalchemy import select
+
         from db.models import UserTwoFactor
         from db.session import get_session
         from services.totp import start_setup
-        from sqlalchemy import select
 
         r = start_setup(self.user.id, "u@x.com")
         with get_session() as s:

@@ -22,19 +22,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, select
 
 from db.models import (
     TERMINAL_NEGATIVE_STAGES,
     Application,
     ApplicationStage,
     TelegramLink,
-    User,
 )
 from db.session import get_session
+from services._ownership import require_owned
 from services.telegram_link import send_to_chat
 
 logger = logging.getLogger(__name__)
@@ -180,18 +180,14 @@ def snooze_application(
     user_id: int, application_id: int, until: date_cls,
 ) -> None:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise PermissionError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, PermissionError, "Application not found.")
         app.snooze_reminders_until = until
         session.commit()
 
 
 def unsnooze_application(user_id: int, application_id: int) -> None:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise PermissionError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, PermissionError, "Application not found.")
         app.snooze_reminders_until = None
         session.commit()
 

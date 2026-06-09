@@ -23,15 +23,16 @@ network is actually permitted.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Dict, Optional
 
 from bs4 import BeautifulSoup
 
+from utils.env import env_bool, env_int
+
 logger = logging.getLogger(__name__)
 
-_RENDER_TIMEOUT_MS = int(os.getenv("BROWSER_RENDER_TIMEOUT_MS", "30000"))
+_RENDER_TIMEOUT_MS = env_int("BROWSER_RENDER_TIMEOUT_MS", 30000)
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -39,7 +40,7 @@ _USER_AGENT = (
 
 
 def browser_enabled() -> bool:
-    return os.getenv("BROWSER_SCRAPER_ENABLED") == "1"
+    return env_bool("BROWSER_SCRAPER_ENABLED")
 
 
 # ---------------------------------------------------------------------------
@@ -105,17 +106,8 @@ def scrape_job_posting(url: str) -> str:
 
 def _parse_job_html(html: str) -> str:
     """Extract plain-text posting content from rendered HTML (pure)."""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "svg"]):
-        tag.decompose()
-
-    candidates = soup.find_all(
-        ["article", "main", "section", "div"],
-        attrs={"class": re.compile(r"(job|posting|description|content|details)", re.I)},
-    )
-    root = candidates[0] if candidates else soup
-    text = root.get_text(separator="\n", strip=True)
-    return re.sub(r"\n{3,}", "\n\n", text)
+    from tools.html_extract import extract_job_text
+    return extract_job_text(html)
 
 
 # ---------------------------------------------------------------------------

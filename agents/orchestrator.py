@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Optional, TypedDict
 
@@ -11,11 +12,12 @@ from agents import (
     salary_analyzer,
 )
 from services.checkpoint import (
-    CHECKPOINT_STAGES,
     CheckpointPayload,
     get_store,
 )
 from utils.timing import timed_block
+
+logger = logging.getLogger(__name__)
 
 
 class JobAnalysisState(TypedDict, total=False):
@@ -96,8 +98,14 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
     worker_state = dict(state)
     worker_state["progress_callback"] = None
 
+    # Re-open the usage-accounting scope inside each worker thread so LLM calls
+    # there are still attributed to the user — contextvars don't propagate into
+    # ThreadPoolExecutor threads, so we capture the value here and re-apply it.
+    from services.usage import account, current_user
+    _acct_user = current_user()
+
     def _run(stage_name, fn, s):
-        with timed_block("pipeline.stage", tags={"stage": stage_name}):
+        with account(_acct_user), timed_block("pipeline.stage", tags={"stage": stage_name}):
             return fn(s)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -106,14 +114,20 @@ def _analyze_company_and_salary(state: Dict) -> Dict:
             futures["company"] = pool.submit(_run, "company", company_analyzer.analyze, dict(worker_state))
         if not salary_done:
             futures["salary"] = pool.submit(_run, "salary", salary_analyzer.analyze, dict(worker_state))
-        results = {name: f.result() for name, f in futures.items()}
+        # Capture each branch's outcome, converting an unexpected raise into an
+        # error result so one branch crashing can't lose the other's checkpoint.
+        results = {}
+        for name, f in futures.items():
+            try:
+                results[name] = f.result()
+            except Exception as exc:  # noqa: BLE001 - surfaced via state["error"]
+                logger.warning("Stage %s raised: %s", name, exc)
+                results[name] = {"error": f"{name} stage failed: {exc}"}
 
-    # Surface the first error from either branch — but persist whichever
-    # half succeeded so a retry doesn't redo it.
-    error = next(
-        (r.get("error") for r in results.values() if r.get("error")),
-        "",
-    )
+    # Surface BOTH branch errors (don't silently drop the second), but persist
+    # whichever half succeeded so a retry doesn't redo it.
+    branch_errors = [r.get("error") for r in results.values() if r.get("error")]
+    error = "; ".join(branch_errors)
 
     if "company" in results and not results["company"].get("error"):
         state["company_analysis"] = results["company"].get("company_analysis", {})

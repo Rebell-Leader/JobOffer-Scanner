@@ -24,17 +24,17 @@ import csv
 import io
 import json
 import re
-from dataclasses import dataclass
 from datetime import date as date_cls
 from datetime import datetime
 from typing import List, Optional
 
-from db.models import ALL_STAGE_KINDS, APPLICATION_STATUSES
+from db.models import APPLICATION_STATUSES
 from services.applications import save_analysis
 from services.projects import ProjectRecord, create_project
 from services.stages import add_stage
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
+from utils.text import strip_code_fence
 
 
 class BulkImportError(ValueError):
@@ -347,11 +347,7 @@ def save_applications(user_id: int, previews: List[dict]) -> List[int]:
 
 def _strict_json_list(text: str):
     """Parse a JSON array from an LLM response, stripping any code fences."""
-    text = (text or "").strip()
-    if text.startswith("```"):
-        # Drop leading ```json or ``` and trailing ```
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```\s*$", "", text)
+    text = strip_code_fence(text)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:

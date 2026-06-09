@@ -20,6 +20,22 @@ def _reset_link_or_token(token: str) -> str:
     return f"Reset token: {token}"
 
 
+def send_verification_email(email: str, token: str) -> bool:
+    """Email an email-verification token/link. Best-effort (False if no SMTP)."""
+    base = os.getenv("APP_BASE_URL")
+    instruction = (
+        f"{base.rstrip('/')}/?verify_token={token}" if base
+        else f"Verification token: {token}"
+    )
+    body = (
+        "Welcome to JobOffer Scanner! Confirm your email to finish setting up "
+        "your account.\n\n"
+        f"{instruction}\n\n"
+        "This link expires in 24 hours. If you didn't sign up, ignore this email.\n"
+    )
+    return send_email(email, "Verify your JobOffer Scanner email", body)
+
+
 def send_password_reset_email(email: str, token: str) -> bool:
     """Email a password-reset token/link. Best-effort (False if no SMTP)."""
     instruction = _reset_link_or_token(token)

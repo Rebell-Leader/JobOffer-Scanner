@@ -31,6 +31,7 @@ from sqlalchemy import desc, select
 
 from db.models import ApiToken
 from db.session import get_session
+from services._ownership import require_owned
 from services.audit import record as _audit
 
 logger = logging.getLogger(__name__)
@@ -147,9 +148,7 @@ def list_for_user(user_id: int) -> List[ApiTokenRecord]:
 
 def revoke(user_id: int, token_id: int) -> None:
     with get_session() as session:
-        row = session.get(ApiToken, token_id)
-        if row is None or row.user_id != user_id:
-            raise ApiTokenError("Token not found.")
+        row = require_owned(session, ApiToken, token_id, user_id, ApiTokenError, "Token not found.")
         if row.revoked_at is None:
             row.revoked_at = datetime.utcnow()
             session.commit()

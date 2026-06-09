@@ -60,7 +60,7 @@ class PDFExportTests(unittest.TestCase):
         self.assertTrue(bytes(out[:5]) == b"%PDF-")
 
     def test_heading_and_inline_bold_parsing(self):
-        from services.pdf_export import _BOLD_RE, _HEADING_RE, _split_inline_bold
+        from services.pdf_export import _HEADING_RE, _split_inline_bold
 
         m = _HEADING_RE.match("### Senior ML Engineer — Acme")
         self.assertIsNotNone(m)
@@ -86,8 +86,9 @@ class PDFExportMissingDepTests(unittest.TestCase):
     def test_raises_when_fpdf_missing(self):
         """When fpdf2 isn't installed, markdown_to_pdf must raise a clear
         PDFExportError instead of silently returning bytes-like junk."""
-        import services.pdf_export as mod
         from unittest import mock
+
+        import services.pdf_export as mod
 
         # Force the import inside markdown_to_pdf to fail.
         real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__

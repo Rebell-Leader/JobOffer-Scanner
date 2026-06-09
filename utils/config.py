@@ -1,8 +1,12 @@
 
+import logging
 import os
 from typing import Dict, List, Union
 
-from utils.llm import get_active_provider, is_demo_mode, TIER_MODELS
+from utils.env import effective_config
+from utils.llm import TIER_MODELS, get_active_provider, is_demo_mode
+
+logger = logging.getLogger(__name__)
 
 
 def check_environment_setup() -> Dict[str, Union[bool, str, None]]:
@@ -19,6 +23,22 @@ def check_environment_setup() -> Dict[str, Union[bool, str, None]]:
         "database_url": bool(os.getenv("DATABASE_URL")),
         "demo_mode": is_demo_mode(),
     }
+
+
+def log_effective_config() -> Dict[str, object]:
+    """Log the resolved, NON-default configuration (from utils.env reads).
+
+    Call once at process startup (api/main, app.py, worker). Makes a typo'd or
+    unexpected override visible — secrets aren't read through utils.env, so this
+    only surfaces tuning knobs (limits, timeouts, budgets, feature flags), never
+    keys. Returns the dict it logged (handy for tests/admin views).
+    """
+    cfg = effective_config()
+    if cfg:
+        logger.info("Effective config (non-default): %s", cfg)
+    else:
+        logger.info("Effective config: all defaults (no env overrides read yet).")
+    return cfg
 
 
 def get_missing_configs() -> List[str]:

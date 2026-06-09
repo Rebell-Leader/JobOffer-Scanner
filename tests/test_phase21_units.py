@@ -142,9 +142,9 @@ class ShareViewTests(unittest.TestCase):
         """include_artifacts=True must surface tailored CVs / cover letters."""
         from unittest import mock
 
+        import services.tailoring as tailoring
         from services.master_cv import save_master_cv
         from services.sharing import create_share, get_view
-        import services.tailoring as tailoring
 
         save_master_cv(self.user.id, "Jane Doe\nSkills: Python, AWS")
         with mock.patch.object(tailoring, "get_completion", return_value="# tailored content"):
@@ -171,10 +171,11 @@ class ShareViewTests(unittest.TestCase):
             get_view(share.token)
 
     def test_get_view_rejects_expired_token(self):
+        from sqlalchemy import select
+
         from db.models import ApplicationShare
         from db.session import get_session
         from services.sharing import ShareError, create_share, get_view
-        from sqlalchemy import select
 
         share = create_share(self.user.id, self.app.id, ttl_days=7)
         # Manually expire.

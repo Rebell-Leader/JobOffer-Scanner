@@ -21,6 +21,7 @@ from sqlalchemy import desc, select
 
 from db.models import BACKGROUND_TERMINAL_STATES, BackgroundAnalysis
 from db.session import get_session
+from services._ownership import require_owned
 from services.analysis_runner import (
     async_enabled,
     enqueue_analysis,
@@ -90,6 +91,7 @@ def submit_background_analysis(
         manual_inputs=manual_inputs,
         model=model,
         resume_text=resume_text,
+        user_id=user_id,
     )
     if task_id is None:
         return None
@@ -146,9 +148,7 @@ def list_for_user(user_id: int) -> List[BackgroundAnalysisRecord]:
 
 def get(user_id: int, analysis_id: int) -> BackgroundAnalysisRecord:
     with get_session() as session:
-        row = session.get(BackgroundAnalysis, analysis_id)
-        if row is None or row.user_id != user_id:
-            raise BackgroundAnalysisError("Background analysis not found.")
+        row = require_owned(session, BackgroundAnalysis, analysis_id, user_id, BackgroundAnalysisError, "Background analysis not found.")
         return _to_record(row)
 
 
@@ -165,9 +165,7 @@ def refresh_state(user_id: int, analysis_id: int) -> BackgroundAnalysisRecord:
     pure reads.
     """
     with get_session() as session:
-        row = session.get(BackgroundAnalysis, analysis_id)
-        if row is None or row.user_id != user_id:
-            raise BackgroundAnalysisError("Background analysis not found.")
+        row = require_owned(session, BackgroundAnalysis, analysis_id, user_id, BackgroundAnalysisError, "Background analysis not found.")
         if row.state in BACKGROUND_TERMINAL_STATES:
             return _to_record(row)
 
@@ -224,9 +222,7 @@ def _stringify_error(payload: Any) -> str:
 
 def delete(user_id: int, analysis_id: int) -> None:
     with get_session() as session:
-        row = session.get(BackgroundAnalysis, analysis_id)
-        if row is None or row.user_id != user_id:
-            raise BackgroundAnalysisError("Background analysis not found.")
+        row = require_owned(session, BackgroundAnalysis, analysis_id, user_id, BackgroundAnalysisError, "Background analysis not found.")
         session.delete(row)
         session.commit()
 

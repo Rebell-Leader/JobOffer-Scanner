@@ -8,7 +8,6 @@ canonical identifier; we normalize to lowercase so "Alice@x.com" and
 from __future__ import annotations
 
 import logging
-import os
 import re
 import secrets
 from dataclasses import dataclass
@@ -50,6 +49,7 @@ class AuthedUser:
     id: int
     email: str
     two_factor_required: bool = False
+    email_verified: bool = True
 
 
 def _normalize_email(email: str) -> str:
@@ -88,7 +88,7 @@ def register_user(email: str, password: str) -> AuthedUser:
         session.commit()
         session.refresh(user)
         _audit("user.register", user_id=user.id, details={"email": email})
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
 def authenticate_user(email: str, password: str) -> AuthedUser:
@@ -125,12 +125,13 @@ def authenticate_user(email: str, password: str) -> AuthedUser:
             )
             return AuthedUser(
                 id=user.id, email=user.email, two_factor_required=True,
+                email_verified=user.email_verified,
             )
         _audit("user.login.success", user_id=user.id, details={"email": email})
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
-def create_oauth_user(email: str) -> AuthedUser:
+def create_oauth_user(email: str, email_verified: bool = True) -> AuthedUser:
     """Create a user for an OAuth sign-up with an unusable random password.
 
     OAuth users authenticate via the external provider, never via password —
@@ -144,19 +145,51 @@ def create_oauth_user(email: str) -> AuthedUser:
     with get_session() as session:
         existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
-            return AuthedUser(id=existing.id, email=existing.email)
-        user = User(email=email, password_hash=_hash_password(secrets.token_urlsafe(32)))
+            return AuthedUser(id=existing.id, email=existing.email,
+                              email_verified=existing.email_verified)
+        # New OAuth account. Trust the provider's email-verification status
+        # (the caller passes it through from the OIDC/verified-primary claim);
+        # default True for backward compatibility with non-OAuth callers.
+        user = User(
+            email=email,
+            password_hash=_hash_password(secrets.token_urlsafe(32)),
+            email_verified=email_verified,
+        )
         session.add(user)
         session.commit()
         session.refresh(user)
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=email_verified)
 
 
 def find_user_by_email(email: str) -> Optional[AuthedUser]:
     email = _normalize_email(email)
     with get_session() as session:
         user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
-        return AuthedUser(id=user.id, email=user.email) if user else None
+        return (
+            AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
+            if user else None
+        )
+
+
+def delete_account(user_id: int, password: str) -> None:
+    """Permanently delete a user and ALL their data.
+
+    Gated by a current-password re-check. Deleting the ``User`` row cascades
+    (FK ``ondelete=CASCADE``) to applications, stages, artifacts, master CV +
+    revisions, projects, shares, webhooks, API tokens, 2FA, OAuth identities,
+    telegram link, reset tokens, and background analyses. Audit-logged before
+    deletion (the audit row's user_id is set NULL by its own
+    ``ondelete=SET NULL`` so the record survives the cascade).
+    """
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if user is None or not _verify_password(password, user.password_hash):
+            raise AuthError("Current password is incorrect.")
+        email = user.email
+        # Record the intent BEFORE the row vanishes.
+        _audit("user.account.delete", user_id=user_id, details={"email": email})
+        session.delete(user)
+        session.commit()
 
 
 def get_user(user_id: int) -> Optional[AuthedUser]:
@@ -164,7 +197,7 @@ def get_user(user_id: int) -> Optional[AuthedUser]:
         user = session.get(User, user_id)
         if user is None:
             return None
-        return AuthedUser(id=user.id, email=user.email)
+        return AuthedUser(id=user.id, email=user.email, email_verified=user.email_verified)
 
 
 def change_password(user_id: int, current_password: str, new_password: str) -> None:

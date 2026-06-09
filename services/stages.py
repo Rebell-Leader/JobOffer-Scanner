@@ -19,7 +19,7 @@ from datetime import date as date_cls
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import asc, desc, select
+from sqlalchemy import asc, select
 
 from db.models import (
     ALL_STAGE_KINDS,
@@ -29,6 +29,7 @@ from db.models import (
     ApplicationStage,
 )
 from db.session import get_session
+from services._ownership import require_owned
 
 
 class StageError(ValueError):
@@ -118,9 +119,7 @@ def add_stage(
     occurred_on = occurred_on or date_cls.today()
 
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Application not found.")
+        app = require_owned(session, Application, application_id, user_id, StageError, "Application not found.")
         stage = ApplicationStage(
             application_id=application_id,
             kind=kind,
@@ -137,14 +136,29 @@ def add_stage(
             app.status = new_status
         session.commit()
         session.refresh(stage)
-        return _to_record(stage)
+        record = _to_record(stage)
+        company_name, job_title = app.company_name, app.job_title
+
+    # Fire the webhook from the SERVICE so every entry point (UI, API, bot)
+    # delivers it — it previously lived only in the Streamlit handler.
+    # Best-effort: dispatch_event_durable never raises into the caller.
+    from services.webhooks import dispatch_event_durable
+    dispatch_event_durable(
+        user_id, "stage.added",
+        {
+            "application_id": application_id,
+            "company_name": company_name,
+            "job_title": job_title,
+            "stage": record.kind,
+            "occurred_on": record.occurred_on.isoformat(),
+        },
+    )
+    return record
 
 
 def list_stages(user_id: int, application_id: int) -> List[StageRecord]:
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Application not found.")
+        require_owned(session, Application, application_id, user_id, StageError, "Application not found.")
         rows = session.execute(
             select(ApplicationStage)
             .where(ApplicationStage.application_id == application_id)
@@ -158,9 +172,7 @@ def delete_stage(user_id: int, stage_id: int) -> None:
         stage = session.get(ApplicationStage, stage_id)
         if stage is None:
             raise StageError("Stage not found.")
-        app = session.get(Application, stage.application_id)
-        if app is None or app.user_id != user_id:
-            raise StageError("Stage not found.")
+        app = require_owned(session, Application, stage.application_id, user_id, StageError, "Stage not found.")
         session.delete(stage)
         session.flush()
         # Re-derive status from the remaining stages.

@@ -13,17 +13,18 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
-    BigInteger as sa_BigInt,
     Boolean,
-    Column,
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
-    Index,
+)
+from sqlalchemy import (
+    BigInteger as sa_BigInt,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -50,6 +51,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # New password signups start unverified (ORM default False). The migration
+    # backfills existing rows to True (server_default) so no one is locked out,
+    # and OAuth-created users are set True explicitly (provider verified email).
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     applications: Mapped[list["Application"]] = relationship(
@@ -88,11 +93,14 @@ class User(Base):
 class UserTwoFactor(Base):
     """TOTP-based second factor for one user.
 
-    ``secret`` is the base32 TOTP shared secret. It is stored unencrypted
-    here — for production-grade key protection, layer in an envelope-
-    encryption step using a KMS-derived key. TOTP is secondary defence;
-    the primary protection against credential stuffing is the bcrypt
-    password hash, which remains intact under a DB-only compromise.
+    ``secret`` is the base32 TOTP shared secret. It is envelope-encrypted at
+    rest (``utils.crypto``, ``enc:v1:…``) whenever ``SECRETS_ENCRYPTION_KEY``
+    is configured; without a key it is stored plaintext (dev/demo) and any
+    legacy plaintext row is re-encrypted opportunistically on the next
+    successful verify. The wider column accommodates the Fernet ciphertext.
+    TOTP is secondary defence; the primary protection against credential
+    stuffing is the bcrypt password hash, which remains intact under a
+    DB-only compromise.
 
     ``backup_codes`` is the list of bcrypt-hashed one-time recovery codes
     the user can use instead of an OTP. Used codes are removed from the
@@ -108,7 +116,7 @@ class UserTwoFactor(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False, unique=True, index=True,
     )
-    secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
     verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     backup_codes: Mapped[Optional[list]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -117,6 +125,25 @@ class UserTwoFactor(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="two_factor")
+
+
+class EmailVerificationToken(Base):
+    """Short-lived email-verification token (bcrypt-hashed, like reset tokens).
+
+    Created on signup; the user clicks the emailed link / pastes the token to
+    mark their account ``email_verified``. One-shot via ``used_at``.
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class OAuthIdentity(Base):
@@ -541,6 +568,11 @@ AUDIT_KINDS = (
     "user.oauth.login",
     "user.oauth.register",
     "user.oauth.link",
+    "user.oauth.link_refused",
+    "user.account.delete",
+    "user.account.export",
+    "user.email.verify.request",
+    "user.email.verify.complete",
 )
 
 
@@ -655,3 +687,38 @@ class BackgroundAnalysis(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+# ---------------------------------------------------------------------------
+# LLM usage ledger — per-call token accounting for cost controls + budgets
+# ---------------------------------------------------------------------------
+
+
+class LlmUsage(Base):
+    """One LLM completion's token usage + estimated cost.
+
+    Rows are written best-effort after each real provider call (demo-mode
+    calls record nothing). ``user_id`` is nullable: calls made outside an
+    attributed request (e.g. a CLI/maintenance path) are still ledgered for
+    global accounting with a NULL owner. Cost is stored as integer
+    micro-USD (millionths of a dollar) to keep it exact in the DB; the
+    pricing table that produces it lives in ``services/usage`` and is
+    env-overridable. ``services/usage.check_budget`` sums ``cost_micro_usd``
+    over a rolling window to enforce ``LLM_BUDGET_USD``.
+    """
+
+    __tablename__ = "llm_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_micro_usd: Mapped[int] = mapped_column(sa_BigInt, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )

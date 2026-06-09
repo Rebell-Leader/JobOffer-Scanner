@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

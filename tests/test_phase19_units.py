@@ -81,8 +81,9 @@ class BackgroundSubmitTests(unittest.TestCase):
             )
 
     def test_list_for_user_returns_newest_first(self):
-        import services.background_analysis as mod
         import time
+
+        import services.background_analysis as mod
 
         with mock.patch.object(mod, "async_enabled", return_value=True), \
              mock.patch.object(mod, "enqueue_analysis", side_effect=["t1", "t2", "t3"]):
@@ -223,7 +224,7 @@ class BackgroundRefreshTests(unittest.TestCase):
         # Submit a second row.
         with mock.patch.object(mod, "async_enabled", return_value=True), \
              mock.patch.object(mod, "enqueue_analysis", return_value="task-2"):
-            second = mod.submit_background_analysis(
+            mod.submit_background_analysis(
                 self.user.id, "p2", {"company_name": "Acme"},
             )
 
@@ -260,9 +261,9 @@ class BackgroundCleanupTests(unittest.TestCase):
         with mock.patch.object(mod, "async_enabled", return_value=True), \
              mock.patch.object(mod, "enqueue_analysis",
                                side_effect=["old", "fresh"]):
-            old_rec = mod.submit_background_analysis(
+            mod.submit_background_analysis(
                 self.user.id, "p", {"company_name": "A"})
-            fresh_rec = mod.submit_background_analysis(
+            mod.submit_background_analysis(
                 self.user.id, "p", {"company_name": "B"})
 
         with get_session() as s:
