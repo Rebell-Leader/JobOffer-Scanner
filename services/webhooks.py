@@ -338,6 +338,8 @@ def attempt_delivery(delivery_id: int) -> bool:
 
     with get_session() as session:
         row = session.get(WebhookDelivery, delivery_id)
+        if row is None:  # pragma: no cover - row was just created above
+            return success
         row.attempts += 1
         row.success = success
         row.status_code = status_code
@@ -351,7 +353,10 @@ def _deliver(hook: WebhookRecord, event: str, payload: dict) -> DeliveryRecord:
     delivery_id = _create_delivery(hook, event, payload)
     attempt_delivery(delivery_id)
     with get_session() as session:
-        return _to_delivery(session.get(WebhookDelivery, delivery_id))
+        row = session.get(WebhookDelivery, delivery_id)
+        if row is None:  # pragma: no cover - row was just created above
+            raise WebhookError("Delivery row missing after creation.")
+        return _to_delivery(row)
 
 
 def redeliver(user_id: int, delivery_id: int) -> DeliveryRecord:

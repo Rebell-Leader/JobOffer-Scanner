@@ -135,7 +135,7 @@ class RedisCheckpointStore:
             return payload
         for stage, val in (raw or {}).items():
             try:
-                payload.stages[stage] = json.loads(val)
+                payload.stages[str(stage)] = json.loads(val)
             except (TypeError, ValueError):
                 continue
         return payload

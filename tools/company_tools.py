@@ -18,7 +18,7 @@ import logging
 try:
     from langchain_core.tools import Tool  # langchain >= 0.3
 except ImportError:  # pragma: no cover - older langchain layout
-    from langchain.tools import Tool
+    from langchain.tools import Tool  # type: ignore[attr-defined,no-redef]
 
 from tools.data_sources import fetch_company_news, fetch_layoffs
 from utils.cache import cache

@@ -63,8 +63,8 @@ def fetch_company_news(company_name: str) -> Optional[str]:
                     "q": f'"{company_name}"',
                     "sortBy": "publishedAt",
                     "language": "en",
-                    "pageSize": 10,
-                    "apiKey": api_key,
+                    "pageSize": "10",
+                    "apiKey": api_key or "",
                 },
                 timeout=_HTTP_TIMEOUT,
             )
@@ -265,7 +265,7 @@ def fetch_salary_benchmark(
         "app_id": app_id,
         "app_key": app_key,
         "what": job_title,
-        "results_per_page": 50,
+        "results_per_page": "50",
         "content-type": "application/json",
     }
     if location:

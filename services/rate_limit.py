@@ -80,7 +80,7 @@ class _RedisBackend:
             # Roll back the add we just made so a denied attempt doesn't count.
             self._redis.zpopmax(key, 1)
             oldest = self._redis.zrange(key, 0, 0, withscores=True)
-            retry_after = max(0.0, (oldest[0][1] + window - now)) if oldest else window
+            retry_after = max(0.0, (float(oldest[0][1]) + window - now)) if oldest else window
             return RateLimitDecision(allowed=False, retry_after=retry_after)
         return RateLimitDecision(allowed=True, retry_after=0.0)
 

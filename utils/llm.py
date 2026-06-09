@@ -280,7 +280,11 @@ def _complete_anthropic(
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
-    parts = [block.text for block in resp.content if getattr(block, "type", None) == "text"]
+    parts = [
+        getattr(block, "text", "")
+        for block in resp.content
+        if getattr(block, "type", None) == "text"
+    ]
     usage = None
     u = getattr(resp, "usage", None)
     if u is not None:
