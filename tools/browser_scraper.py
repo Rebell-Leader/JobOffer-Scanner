@@ -106,17 +106,8 @@ def scrape_job_posting(url: str) -> str:
 
 def _parse_job_html(html: str) -> str:
     """Extract plain-text posting content from rendered HTML (pure)."""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "svg"]):
-        tag.decompose()
-
-    candidates = soup.find_all(
-        ["article", "main", "section", "div"],
-        attrs={"class": re.compile(r"(job|posting|description|content|details)", re.I)},
-    )
-    root = candidates[0] if candidates else soup
-    text = root.get_text(separator="\n", strip=True)
-    return re.sub(r"\n{3,}", "\n\n", text)
+    from tools.html_extract import extract_job_text
+    return extract_job_text(html)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,6 @@ import re
 from typing import Optional
 
 import requests
-from bs4 import BeautifulSoup
 
 from utils.env import env_bool, env_float, env_int
 
@@ -155,17 +154,5 @@ def _try_browser_fallback(url: str) -> Optional[str]:
 
 
 def _clean_html(body: bytes) -> str:
-    soup = BeautifulSoup(body, "html.parser")
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
-        tag.decompose()
-
-    # Prefer a likely job-description container if present.
-    candidates = soup.find_all(
-        ["article", "main", "section", "div"],
-        attrs={"class": re.compile(r"(job|posting|description|content)", re.I)},
-    )
-    root = candidates[0] if candidates else soup
-
-    text = root.get_text(separator="\n", strip=True)
-    # Collapse runs of blank lines.
-    return re.sub(r"\n{3,}", "\n\n", text)
+    from tools.html_extract import extract_job_text
+    return extract_job_text(body)

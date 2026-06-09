@@ -27,28 +27,81 @@ agents/                 LangGraph pipeline: orchestrator + per-stage agents
   job_/company_/salary_/resume_analyzer.py, report_generator.py
 tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
-  url_ingest, browser_scraper (Playwright, optional),
+  url_ingest, browser_scraper (Playwright, optional), html_extract (shared),
   company_research (agentic keyless DuckDuckGo + Browserbase fallback)
-services/               Business logic (29 modules) — the bulk of the app
+services/               Business logic (31 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
   master_cv, projects, tailoring, constraint_check, suggestions, pdf_export  (CV/artifacts)
   sharing, webhooks, telegram_link, notifications, email, reminders  (integrations)
-  checkpoint, bulk_import, system_test, analysis_runner,
-  account_export, email_verify
+  checkpoint, bulk_import, system_test, analysis_runner, usage (LLM cost),
+  account_export, email_verify, _ownership (require_owned helper)
 db/                     SQLAlchemy 2.0 models + session (StaticPool-aware)
 api/                    FastAPI app: routes, bearer auth, security headers
 bot/                    Telegram bot: handlers (pure) + main (runtime)
 worker/                 Celery app + tasks + CLI runners (reminders, metrics_dump)
-utils/                  llm, config, security, diff, verdict, logging_setup, metrics, timing, cache
-migrations/             Alembic (15 revisions, 19 tables)
+utils/                  LEAF layer: llm, config, env, crypto, security, diff,
+                        verdict, text, logging_setup, metrics, timing, cache
+migrations/             Alembic (17 revisions, 20 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddy/nginx reverse-proxy examples (CSP/HSTS) +
                         README (edge topology) + RUNBOOK (backups/incidents)
 scripts/                backup_db.sh / restore_db.sh (Postgres ops)
-tests/                  33 files, 535 Python tests (7 live e2e, skipped
+tests/                  43 files, 647 Python tests (7 live e2e, skipped
                         unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
+
+## Architecture & layering (keep this clean)
+
+Strict one-directional dependency flow — never import upward:
+
+```
+app.py / api/ / bot/        entry points (UI, REST, Telegram)
+        │
+        ▼
+   services/                business logic (owns the DB, side-effects, policy)
+        │
+        ▼
+      db/                    SQLAlchemy models + session
+
+agents/  (LangGraph pipeline)  ─┐
+tools/   (LLM-facing tools)     ├─▶  utils/   (LEAF — depends on nothing internal)
+                                ─┘
+worker/  (Celery) consumes services; runs the same pipeline off-process.
+```
+
+- **`utils/` is a LEAF.** It must NOT import from `services/agents/tools/api/
+  bot/worker`. When a leaf needs a higher-layer behaviour (e.g. the LLM client
+  notifying the usage ledger), use an **observer**: `utils/llm` exposes
+  `register_usage_recorder`; `services/usage` registers `record_completion`
+  into it on import (wired via `services/__init__`). Don't reach back up.
+- **`db/` is below services** — it may import `utils.env` (config) but nothing
+  else internal. No business logic lives in `db/` or `utils/`.
+- **`tools/` and `agents/` depend DOWN on `utils/` only** — the one accepted
+  exception is `agents/orchestrator` importing `services.checkpoint` (resume
+  persistence) + `services.usage` (per-thread attribution). Provider/transport
+  code lives only in `utils/llm`; a service calling `get_completion` to run a
+  domain prompt is correct (business orchestration), not a layer break.
+- **`services ↔ worker` is the one accepted bidirectional seam** (producer in
+  services, consumer in worker). The `services → worker` direction is ALWAYS a
+  lazy in-function import to avoid an import-time cycle; keep it that way.
+- **Import full submodule paths** — `from utils.cache import cache`, not
+  `from utils import cache`. The `utils/` and `tools/` `__init__.py` are
+  intentionally empty (no symbol re-exports) so a submodule is never shadowed
+  by a same-named re-exported value.
+
+### Shared helpers — use these, don't re-roll them
+
+- **Config:** `utils/env.env_{str,bool,int,float}` — never `os.getenv(...) ==
+  "1"` (env_bool accepts `1/true/yes/on`) or ad-hoc `int(os.getenv(...))`.
+  Reads are recorded; `utils/config.log_effective_config()` logs non-default
+  config at startup (don't read secrets through this).
+- **Ownership:** `services/_ownership.require_owned(session, Model, id,
+  user_id, exc, msg)` for every owned fetch — don't inline the
+  `is None or .user_id != user_id` check.
+- **LLM-output text:** `utils/text.strip_code_fence` (fenced JSON) and
+  `tools/html_extract.extract_job_text` (posting HTML → text) are the single
+  implementations — reuse them.
 
 ## How to run
 
@@ -69,7 +122,7 @@ celery -A worker.celery_app:app worker
 python -m worker.reminders
 
 # Tests
-python -m unittest discover -s tests      # ~5 min, 506 tests
+python -m unittest discover -s tests      # ~6 min, 647 tests (7 e2e skipped)
 node chrome-extension/extract.test.mjs    # 9 JS tests
 
 # Migrations
@@ -168,7 +221,7 @@ and "production-grade for real multi-user traffic." Prioritized:
    all migrations and asserts no add/remove table-or-column drift vs the
    models. Runs in CI via the unittest job.
 
-### P1 — hardening + confidence (in progress)
+### P1 — ✅ DONE (hardening + confidence)
 5. ✅ **CI quality gates:** ruff (lint) + mypy (type) + bandit (hard gate) +
    pip-audit (advisory) + coverage floor 80% + JS tests in CI + Node-24 opt-in.
    Config in `pyproject.toml`; jobs in `.github/workflows/tests.yml`.

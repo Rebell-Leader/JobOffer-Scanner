@@ -1,9 +1,7 @@
-from .company_tools import company_tools
-from .job_tools import job_tools
-from .salary_tools import salary_tools
+"""LLM-facing tools + ingestion.
 
-__all__ = [
-    'job_tools',
-    'company_tools',
-    'salary_tools'
-]
+Import submodules by their full path — ``from tools.job_tools import
+extract_job_details`` — rather than re-exporting the ``*_tools`` Tool lists
+here, which would shadow the same-named submodules (``from tools import
+job_tools`` resolving to the list instead of the module).
+"""

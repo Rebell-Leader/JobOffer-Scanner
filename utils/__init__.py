@@ -1,9 +1,7 @@
-from .cache import SimpleCache, cache
-from .llm import get_completion, get_llm_client
+"""Leaf-layer utilities (no imports from services/agents/tools/api/bot/worker).
 
-__all__ = [
-    'get_llm_client',
-    'get_completion',
-    'SimpleCache',
-    'cache'
-]
+Import submodules by their full path — ``from utils.cache import cache``,
+``from utils.llm import get_completion`` — rather than re-exporting symbols
+here, which would shadow the same-named submodules (e.g. ``from utils import
+cache`` resolving to the value instead of the module).
+"""

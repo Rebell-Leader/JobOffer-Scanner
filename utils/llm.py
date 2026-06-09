@@ -456,10 +456,6 @@ real job, company, and compensation analysis.
     )
 
 
-# Backwards-compatibility alias for any callers/tests referencing the old name.
-generate_mock_response = generate_sample_response
-
-
 def ping_provider(provider: str) -> tuple[bool, str]:
     """Make a minimal real API call to verify a provider is reachable.
 
@@ -482,13 +478,3 @@ def ping_provider(provider: str) -> tuple[bool, str]:
         return True, repr(text.strip()[:40])
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
-
-
-def get_llm_client():
-    """Deprecated: kept for backwards compatibility.
-
-    The provider client is now created per-request inside ``get_completion`` so
-    that provider/model selection is resolved at call time. Returns None in
-    demo mode.
-    """
-    return None

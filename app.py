@@ -1,12 +1,12 @@
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from agents.orchestrator import run_analysis
-from db.models import APPLICATION_STATUSES
+from db.models import APPLICATION_STATUSES, PIPELINE_STAGES
 from db.session import init_db
 from services.analysis_runner import async_enabled
 from services.analytics import compute_dashboard
@@ -575,7 +575,7 @@ with st.sidebar.expander("🔑 API tokens"):
         for t in tokens:
             status = (
                 "revoked" if t.revoked_at else
-                "expired" if t.expires_at and t.expires_at <= __import__("datetime").datetime.utcnow() else
+                "expired" if t.expires_at and t.expires_at <= datetime.utcnow() else
                 "active"
             )
             cols = st.columns([4, 1])
@@ -1583,7 +1583,7 @@ with applications_tab:
                         at_pipeline = st.selectbox(
                             "If terminal (rejected/withdrew/ghosted): at which pipeline stage?",
                             ["(none)"] + list(
-                                __import__("db.models", fromlist=["PIPELINE_STAGES"]).PIPELINE_STAGES
+                                PIPELINE_STAGES
                             ),
                             key=f"stage_at_{rec.id}",
                         )
@@ -1899,7 +1899,7 @@ with applications_tab:
                             status = "active"
                             if s.revoked_at:
                                 status = "revoked"
-                            elif s.expires_at and s.expires_at <= __import__("datetime").datetime.utcnow():
+                            elif s.expires_at and s.expires_at <= datetime.utcnow():
                                 status = "expired"
                             col_info, col_act = st.columns([4, 1])
                             with col_info:

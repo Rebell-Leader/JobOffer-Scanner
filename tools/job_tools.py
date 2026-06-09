@@ -19,21 +19,9 @@ except ImportError:  # pragma: no cover - older langchain layout
 from utils.cache import cache
 from utils.llm import get_completion, is_demo_mode
 from utils.security import wrap_untrusted
+from utils.text import strip_code_fence
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_code_fence(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        # ```json ... ``` or ``` ... ```
-        body = text.split("```", 2)
-        if len(body) >= 2:
-            inner = body[1]
-            if inner.startswith("json"):
-                inner = inner[4:]
-            return inner.strip().rstrip("`").strip()
-    return text
 
 
 def _regex_extract(job_posting: str) -> Dict[str, Any]:
@@ -97,7 +85,7 @@ Rules:
 - Return ONLY JSON. No prose, no markdown fences.
 """
     response = get_completion(prompt, model)
-    response = _strip_code_fence(response)
+    response = strip_code_fence(response)
 
     try:
         parsed = json.loads(response)
@@ -144,7 +132,7 @@ Rules:
 - Only include items actually present in the posting. Do not invent.
 - Return ONLY JSON. No prose, no markdown fences.
 """
-    response = _strip_code_fence(get_completion(prompt, model))
+    response = strip_code_fence(get_completion(prompt, model))
     try:
         parsed = json.loads(response)
     except json.JSONDecodeError as exc:

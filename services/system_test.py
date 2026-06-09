@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
+from utils.env import env_bool, env_int
+
 # ---------------------------------------------------------------------------
 # Result container
 # ---------------------------------------------------------------------------
@@ -83,10 +85,10 @@ def _probe_email() -> TestResult:
     if not email_configured():
         return TestResult("Email (SMTP)", ok=False, message="Not configured", skipped=True)
     host = os.getenv("SMTP_HOST", "")
-    port = int(os.getenv("SMTP_PORT", "587"))
+    port = env_int("SMTP_PORT", 587)
     username = os.getenv("SMTP_USERNAME", "")
     password = os.getenv("SMTP_PASSWORD", "")
-    use_tls = os.getenv("SMTP_USE_TLS", "1") == "1"
+    use_tls = env_bool("SMTP_USE_TLS", True)
     t0 = time.time()
     try:
         with smtplib.SMTP(host, port, timeout=8) as server:

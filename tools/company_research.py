@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from typing import List, Optional
 
 import requests
@@ -40,6 +39,7 @@ import requests
 from utils.env import env_bool, env_float, env_int
 from utils.llm import get_active_provider, get_completion
 from utils.security import wrap_untrusted
+from utils.text import strip_code_fence
 
 logger = logging.getLogger(__name__)
 
@@ -244,8 +244,7 @@ def build_queries(company: str, model: str = "fast") -> List[str]:
         f"Company: {wrap_untrusted(company, 'company_name')}"
     )
     try:
-        raw = get_completion(prompt, model).strip()
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+        raw = strip_code_fence(get_completion(prompt, model))
         queries = json.loads(raw)
         cleaned = [str(q).strip() for q in queries if str(q).strip()][:3]
         return cleaned or static

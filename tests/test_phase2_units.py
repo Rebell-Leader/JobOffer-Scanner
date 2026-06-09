@@ -18,20 +18,18 @@ class AnalyzeRequirementsFailureTests(unittest.TestCase):
         cache.clear()
 
     def test_raises_on_non_json_when_keyed(self):
-        import importlib
         from unittest import mock
 
-        jt = importlib.import_module("tools.job_tools")  # pkg shadows the submodule name
+        import tools.job_tools as jt
         with mock.patch.object(jt, "get_completion", return_value="not json at all"), \
              mock.patch.object(jt, "is_demo_mode", return_value=False):
             with self.assertRaises(ValueError):
                 jt.analyze_requirements("Some posting", model="fast")
 
     def test_empty_skeleton_only_in_demo(self):
-        import importlib
         from unittest import mock
 
-        jt = importlib.import_module("tools.job_tools")
+        import tools.job_tools as jt
         with mock.patch.object(jt, "get_completion", return_value="not json"), \
              mock.patch.object(jt, "is_demo_mode", return_value=True):
             out = jt.analyze_requirements("Some posting", model="fast")
