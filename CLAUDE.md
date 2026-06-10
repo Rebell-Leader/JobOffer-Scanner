@@ -47,7 +47,7 @@ chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddy/nginx reverse-proxy examples (CSP/HSTS) +
                         README (edge topology) + RUNBOOK (backups/incidents)
 scripts/                backup_db.sh / restore_db.sh (Postgres ops)
-tests/                  44 files, 673 Python tests (7 live e2e, skipped
+tests/                  45 files, 683 Python tests (7 live e2e, skipped
                         unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
 
@@ -122,7 +122,7 @@ celery -A worker.celery_app:app worker
 python -m worker.reminders
 
 # Tests
-python -m unittest discover -s tests      # ~6 min, 673 tests (7 e2e skipped)
+python -m unittest discover -s tests      # ~6 min, 683 tests (7 e2e skipped)
 node chrome-extension/extract.test.mjs    # 9 JS tests
 
 # Migrations
