@@ -1,0 +1,48 @@
+# Single-box validation deploy: marketing site + app + API behind one Caddy,
+# auto-TLS, on one cheap VPS. Maps the URLs the landing page and waitlist form
+# assume:
+#
+#   /         -> static landing page (landing/index.html, terms, privacy)
+#   /app      -> Streamlit app  (run with: --server.baseUrlPath app)
+#   /api      -> FastAPI         (the /waitlist + /v1/* + /metrics endpoints)
+#
+# Run: caddy run --config deploy/Caddyfile.fullstack
+# Then set on the app/landing side:
+#   LANDING_ORIGIN=https://yourdomain.com   (API CORS for the waitlist POST)
+#   APP_BASE_URL=https://yourdomain.com/app (Stripe redirects)
+# and in landing/index.html keep API_BASE = "/api".
+
+yourdomain.com {
+	encode gzip
+
+	# --- Security headers for the browser surfaces (Streamlit can't set these) ---
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss:; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+	header +Set-Cookie "(.*)" "$1; Secure; SameSite=Lax"
+
+	# REST API (waitlist, billing webhook, /v1/*, /metrics) -> FastAPI.
+	# It sets its own strict JSON headers, so just proxy.
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Streamlit app under /app (needs the websocket upgrade; Caddy handles it).
+	handle_path /app/* {
+		reverse_proxy 127.0.0.1:5000
+	}
+	redir /app /app/
+
+	# Everything else -> the static marketing site.
+	handle {
+		root * /srv/landing
+		try_files {path} {path}/ /index.html
+		file_server
+	}
+}

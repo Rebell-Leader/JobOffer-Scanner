@@ -59,6 +59,47 @@ public deployment, front it with Caddy/nginx (above) or an edge like Cloudflare
 that applies the same CSP/HSTS/cookie policy. The `deploy/*.example` files are
 the source of truth for the header set.
 
+## Single-box validation deploy (cheapest path to live)
+
+To put the marketing site + app + API live on one small VPS for demand
+validation (≤ $40/mo — see `docs/GTM.md`), use `deploy/Caddyfile.fullstack`:
+
+```
+/         -> static landing page (landing/)
+/app      -> Streamlit  (run with --server.baseUrlPath app)
+/api      -> FastAPI    (waitlist + /v1/* + /metrics)
+```
+
+```bash
+# 1. Backends bound to localhost:
+streamlit run app.py --server.address 127.0.0.1 --server.port 5000 \
+    --server.baseUrlPath app
+python -m api.main          # API_HOST=127.0.0.1 API_PORT=8000
+# 2. Edge:
+cp landing/* /srv/landing/      # index.html, terms.html, privacy.html
+caddy run --config deploy/Caddyfile.fullstack
+```
+
+Wire the cross-origin bits so the landing waitlist form reaches the API and
+Stripe redirects land on the app:
+
+```bash
+LANDING_ORIGIN=https://yourdomain.com    # API CORS allow-origin for /waitlist
+APP_BASE_URL=https://yourdomain.com/app  # Stripe checkout success/cancel
+REQUIRE_EMAIL_VERIFICATION=1             # reduce free-tier farming
+```
+The landing page posts to a relative `/api/waitlist`, so no edit needed when
+the API is mounted at `/api`.
+
+## Funnel report (the founder dashboard)
+
+`python -m worker.funnel_report` prints activation / aha / conversion / COGS
+from the existing tables (no third-party analytics). Schedule it weekly:
+
+```cron
+0 9 * * 1  cd /srv/joboffer && python -m worker.funnel_report >> /var/log/joc-funnel.log 2>&1
+```
+
 ## Metrics endpoint
 
 If you scrape `GET /metrics` (see `METRICS_ENABLED`), keep it private: bind the

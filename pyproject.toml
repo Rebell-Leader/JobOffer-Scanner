@@ -37,6 +37,7 @@ worker = ["celery>=5.3.0", "redis>=5.0.0"]
 browser = ["playwright>=1.44.0"]
 pdf = ["fpdf2>=2.7.0"]
 research = ["ddgs>=6.0"]  # keyless DuckDuckGo search for the agentic fallback
+billing = ["stripe>=7.0"]  # Stripe Checkout + webhooks (tier enforcement works without it)
 dev = [
     "ruff>=0.6",
     # Pin to the 1.x line: CI gates must use a reproducible type-checker, and

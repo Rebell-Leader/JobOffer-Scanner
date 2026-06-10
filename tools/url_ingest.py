@@ -75,6 +75,14 @@ def fetch_job_posting(url: str) -> str:
     if not is_url(url):
         raise ValueError("URL must start with http:// or https://")
 
+    # SSRF guard: this fetch runs SERVER-side with the app's network access —
+    # refuse URLs that point at private/internal addresses (cloud metadata,
+    # localhost services). SSRF_ALLOW_PRIVATE_URLS=1 disables for dev.
+    from utils.security import check_url_allowed
+    ok, reason = check_url_allowed(url)
+    if not ok:
+        raise ValueError(reason)
+
     # Known JS boards never yield to a plain GET — go straight to a browser so
     # we don't ingest a consent wall's boilerplate as if it were the posting.
     if is_js_board(url):
