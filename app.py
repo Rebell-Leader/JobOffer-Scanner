@@ -35,6 +35,7 @@ from services.background_analysis import (
 from services.background_analysis import (
     delete as delete_background_analysis,
 )
+from services.billing import TierLimitExceeded as BillingTierError
 from services.bulk_import import (
     BulkImportError,
     parse_applications_csv,
@@ -510,6 +511,62 @@ _render_verification_gate()
 # ---------------------------------------------------------------------------
 
 st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
+
+with st.sidebar.expander("💳 Plan & usage"):
+    from services.billing import (
+        BillingError,
+        create_checkout_session,
+        create_portal_session,
+        plan_summary,
+    )
+    _plan = plan_summary(st.session_state.user_id)
+    if not _plan["billing_enabled"]:
+        st.caption("Self-hosted deployment — no plan limits.")
+    else:
+        st.markdown(f"**{_plan['label']} plan**")
+        _an_lim = _plan["analyses_limit"]
+        _ar_lim = _plan["artifacts_limit"]
+        st.caption(
+            f"Analyses: {_plan['analyses_used']}"
+            + (f" / {_an_lim}" if _an_lim >= 0 else " (unlimited)")
+            + f" · Tailored docs: {_plan['artifacts_used']}"
+            + (f" / {_ar_lim}" if _ar_lim >= 0 else " (unlimited)")
+            + f" · per {_plan['window_days']} days"
+        )
+        if _plan["tier"] == "free":
+            _up_col1, _up_col2 = st.columns(2)
+            with _up_col1:
+                if st.button("Upgrade to Pro", key="upgrade_pro"):
+                    try:
+                        _url = create_checkout_session(
+                            st.session_state.user_id, "pro",
+                            user_email=st.session_state.user_email,
+                        )
+                        st.session_state["checkout_url"] = _url
+                    except BillingError as exc:
+                        st.error(str(exc))
+            with _up_col2:
+                if st.button("Upgrade to Power", key="upgrade_power"):
+                    try:
+                        _url = create_checkout_session(
+                            st.session_state.user_id, "power",
+                            user_email=st.session_state.user_email,
+                        )
+                        st.session_state["checkout_url"] = _url
+                    except BillingError as exc:
+                        st.error(str(exc))
+            if st.session_state.get("checkout_url"):
+                st.link_button("→ Complete checkout", st.session_state["checkout_url"])
+        else:
+            if st.button("Manage billing", key="billing_portal"):
+                try:
+                    st.session_state["portal_url"] = create_portal_session(
+                        st.session_state.user_id
+                    )
+                except BillingError as exc:
+                    st.error(str(exc))
+            if st.session_state.get("portal_url"):
+                st.link_button("→ Open billing portal", st.session_state["portal_url"])
 
 with st.sidebar.expander("📜 My recent activity"):
     from services.audit import list_for_user as _list_audit
@@ -1115,16 +1172,22 @@ with analyze_tab:
             }
             selected_model = "detailed" if "Detailed" in model_choice else "fast"
 
-            # Quota check — runs BEFORE the LLM does any work. Covers both the
-            # request-count rate limit and the rolling spend budget.
+            # Quota check — runs BEFORE the LLM does any work. Covers the
+            # request-count rate limit, the spend budget, and the plan tier.
             from services.analysis_runner import check_user_quota
+            from services.billing import TierLimitExceeded, clamp_model
             from services.rate_limit import RateLimitExceeded
             from services.usage import BudgetExceeded
             try:
                 check_user_quota(st.session_state.user_id)
-            except (RateLimitExceeded, BudgetExceeded) as exc:
+            except (RateLimitExceeded, BudgetExceeded, TierLimitExceeded) as exc:
                 st.error(str(exc))
                 st.stop()
+            # Free plan runs on the fast model; paid plans keep their choice.
+            clamped = clamp_model(st.session_state.user_id, selected_model)
+            if clamped != selected_model:
+                st.info("Detailed analysis is a paid-plan feature — running the fast model.")
+                selected_model = clamped
 
             st.subheader("Analysis Progress")
             progress_bar = st.progress(0)
@@ -1633,7 +1696,7 @@ with applications_tab:
                                     )
                                     st.success(f"Saved tailored CV #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError) as exc:
                                     st.error(str(exc))
                     with art_col2:
                         # Tone preset for cover letters — persists per-application
@@ -1656,7 +1719,7 @@ with applications_tab:
                                     )
                                     st.success(f"Saved cover letter #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError) as exc:
                                     st.error(str(exc))
 
                 # List existing artifacts (newest first).

@@ -19,6 +19,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
 
+from api.billing import router as billing_router
 from api.routes import router
 from api.security import add_security_headers
 from db.session import init_db
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
     app.include_router(router)
+    app.include_router(billing_router)
     add_security_headers(app)
 
     @app.get("/healthz")

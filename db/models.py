@@ -573,6 +573,10 @@ AUDIT_KINDS = (
     "user.account.export",
     "user.email.verify.request",
     "user.email.verify.complete",
+    "billing.checkout.started",
+    "billing.subscription.created",
+    "billing.subscription.updated",
+    "billing.subscription.canceled",
 )
 
 
@@ -719,6 +723,62 @@ class LlmUsage(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_micro_usd: Mapped[int] = mapped_column(sa_BigInt, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Billing — subscription tiers + metered usage events
+# ---------------------------------------------------------------------------
+
+# Tier names are validated in services/billing (the limits table lives there,
+# not in the schema, so changing a quota doesn't need a migration).
+SUBSCRIPTION_STATUSES = ("active", "past_due", "canceled", "incomplete")
+
+
+class Subscription(Base):
+    """One user's paid plan, mirrored from Stripe via webhooks.
+
+    Absence of a row means the FREE tier (when billing is enabled) or the
+    self-hosted UNLIMITED tier (when no Stripe key is configured — billing
+    must never constrain self-hosters). ``tier`` is denormalised from the
+    Stripe price so quota checks never need a network call.
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True,
+    )
+    tier: Mapped[str] = mapped_column(String(16), nullable=False, default="free")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class UsageEvent(Base):
+    """One metered product action (e.g. an analysis run) for tier quotas.
+
+    Distinct from ``llm_usage`` (per-completion token costs): a single
+    analysis spans many completions, but bills as ONE event. Tier quota
+    checks count rows over a rolling window; rows are tiny and prunable.
+    """
+
+    __tablename__ = "usage_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )

@@ -29,25 +29,25 @@ tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
   url_ingest, browser_scraper (Playwright, optional), html_extract (shared),
   company_research (agentic keyless DuckDuckGo + Browserbase fallback)
-services/               Business logic (31 modules) — the bulk of the app
+services/               Business logic (32 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
   master_cv, projects, tailoring, constraint_check, suggestions, pdf_export  (CV/artifacts)
   sharing, webhooks, telegram_link, notifications, email, reminders  (integrations)
   checkpoint, bulk_import, system_test, analysis_runner, usage (LLM cost),
-  account_export, email_verify, _ownership (require_owned helper)
+  billing (tiers/Stripe), account_export, email_verify, _ownership (require_owned)
 db/                     SQLAlchemy 2.0 models + session (StaticPool-aware)
 api/                    FastAPI app: routes, bearer auth, security headers
 bot/                    Telegram bot: handlers (pure) + main (runtime)
 worker/                 Celery app + tasks + CLI runners (reminders, metrics_dump)
 utils/                  LEAF layer: llm, config, env, crypto, security, diff,
                         verdict, text, logging_setup, metrics, timing, cache
-migrations/             Alembic (17 revisions, 20 tables)
+migrations/             Alembic (18 revisions, 22 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddy/nginx reverse-proxy examples (CSP/HSTS) +
                         README (edge topology) + RUNBOOK (backups/incidents)
 scripts/                backup_db.sh / restore_db.sh (Postgres ops)
-tests/                  43 files, 647 Python tests (7 live e2e, skipped
+tests/                  44 files, 673 Python tests (7 live e2e, skipped
                         unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
 
@@ -122,7 +122,7 @@ celery -A worker.celery_app:app worker
 python -m worker.reminders
 
 # Tests
-python -m unittest discover -s tests      # ~6 min, 647 tests (7 e2e skipped)
+python -m unittest discover -s tests      # ~6 min, 673 tests (7 e2e skipped)
 node chrome-extension/extract.test.mjs    # 9 JS tests
 
 # Migrations
@@ -161,6 +161,14 @@ mode** (sample data, clearly labelled). `DATABASE_URL` unset ⇒ SQLite at
   only links an external identity to a pre-existing local account when the
   provider asserts the email is verified (Google OIDC claim / GitHub verified
   primary) — otherwise it refuses (anti-account-takeover).
+- **Billing never constrains self-hosters.** `services/billing`: with no
+  `STRIPE_SECRET_KEY`, every user is on the `unlimited` tier and all quota
+  checks are no-ops. With a key, no-subscription = `free` tier; quotas
+  (analyses/window, artifacts/window, tier LLM budget, detailed-model,
+  API access) are enforced inside `check_user_quota`, `tailoring`, and
+  `api/auth` — entry points only catch `TierLimitExceeded`. Tier limits
+  live in code (`TIER_LIMITS_JSON` to override), the user's tier in the
+  `subscriptions` table (mirrored from Stripe via `POST /v1/billing/webhook`).
 - **Migrations:** add a model field ⇒ add an Alembic migration. CI runs the
   full `up → down → up` on real Postgres. `db.session.reset_engine_for_testing`
   uses **StaticPool** so thread-hopping tests (bot handlers, Streamlit

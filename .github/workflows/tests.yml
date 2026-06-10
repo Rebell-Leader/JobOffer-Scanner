@@ -169,6 +169,7 @@ jobs:
               "user_two_factor", "application_shares", "api_tokens",
               "webhooks", "webhook_deliveries", "oauth_identities",
               "email_verification_tokens", "llm_usage",
+              "subscriptions", "usage_events",
           }
           missing = required - tables
           assert not missing, f"missing tables after migrate: {missing}"
