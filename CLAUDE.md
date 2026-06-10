@@ -29,25 +29,28 @@ tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
   url_ingest, browser_scraper (Playwright, optional), html_extract (shared),
   company_research (agentic keyless DuckDuckGo + Browserbase fallback)
-services/               Business logic (32 modules) — the bulk of the app
+services/               Business logic (34 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
   master_cv, projects, tailoring, constraint_check, suggestions, pdf_export  (CV/artifacts)
   sharing, webhooks, telegram_link, notifications, email, reminders  (integrations)
   checkpoint, bulk_import, system_test, analysis_runner, usage (LLM cost),
-  billing (tiers/Stripe), account_export, email_verify, _ownership (require_owned)
+  billing (tiers/Stripe), funnel (operator metrics), waitlist,
+  account_export, email_verify, _ownership (require_owned)
 db/                     SQLAlchemy 2.0 models + session (StaticPool-aware)
 api/                    FastAPI app: routes, bearer auth, security headers
 bot/                    Telegram bot: handlers (pure) + main (runtime)
 worker/                 Celery app + tasks + CLI runners (reminders, metrics_dump)
 utils/                  LEAF layer: llm, config, env, crypto, security, diff,
                         verdict, text, logging_setup, metrics, timing, cache
-migrations/             Alembic (18 revisions, 22 tables)
+migrations/             Alembic (19 revisions, 23 tables)
 chrome-extension/       MV3 extension calling the REST API (JS, Node-tested)
 deploy/                 Caddy/nginx reverse-proxy examples (CSP/HSTS) +
                         README (edge topology) + RUNBOOK (backups/incidents)
 scripts/                backup_db.sh / restore_db.sh (Postgres ops)
-tests/                  45 files, 683 Python tests (7 live e2e, skipped
+landing/                static marketing site + waitlist form (deploy at edge)
+docs/                   STRIPE_SETUP, HARDENING, GTM (founder/ops guides)
+tests/                  46 files, 697 Python tests (7 live e2e, skipped
                         unless RUN_E2E=1) + 9 JS (extract.test.mjs)
 ```
 
@@ -122,7 +125,7 @@ celery -A worker.celery_app:app worker
 python -m worker.reminders
 
 # Tests
-python -m unittest discover -s tests      # ~6 min, 683 tests (7 e2e skipped)
+python -m unittest discover -s tests      # ~6 min, 697 tests (7 e2e skipped)
 node chrome-extension/extract.test.mjs    # 9 JS tests
 
 # Migrations

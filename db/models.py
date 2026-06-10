@@ -782,3 +782,20 @@ class UsageEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
+
+
+class WaitlistEntry(Base):
+    """A marketing-site email capture for people not ready to sign up.
+
+    Public, unauthenticated insert (POST /waitlist). Email is unique so the
+    same address can't pad the count; ``source`` tags the campaign/referrer.
+    """
+
+    __tablename__ = "waitlist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )

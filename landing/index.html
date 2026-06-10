@@ -209,6 +209,53 @@
   </div>
 </section>
 
+<section id="waitlist">
+  <div class="card" style="text-align:center;padding:34px">
+    <h2 style="margin-bottom:8px">Not ready to sign up?</h2>
+    <p class="lead" style="margin:0 auto 20px">Get one email when we ship new
+    features and launch deals — no spam, unsubscribe anytime.</p>
+    <form id="wl-form" style="display:flex;gap:10px;max-width:440px;margin:0 auto;flex-wrap:wrap;justify-content:center">
+      <input id="wl-email" type="email" required placeholder="you@example.com"
+        style="flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-size:1rem">
+      <button class="btn primary" type="submit">Keep me posted</button>
+    </form>
+    <p id="wl-msg" style="margin-top:12px;font-size:.9rem;color:var(--muted);min-height:1.2em"></p>
+  </div>
+</section>
+<script>
+  // The API base. Behind the recommended proxy the API is mounted at /api;
+  // override here if you host it elsewhere.
+  const API_BASE = "/api";
+  const form = document.getElementById("wl-form");
+  const msg = document.getElementById("wl-msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("wl-email").value.trim();
+    msg.textContent = "Adding you…";
+    try {
+      const r = await fetch(API_BASE + "/waitlist", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({email, source: "landing"}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        msg.style.color = "var(--green)";
+        msg.textContent = data.already
+          ? "You're already on the list — thanks!"
+          : "You're in. We'll be in touch.";
+        form.reset();
+      } else {
+        msg.style.color = "var(--red)";
+        msg.textContent = data.detail || "Something went wrong. Try again.";
+      }
+    } catch (err) {
+      msg.style.color = "var(--red)";
+      msg.textContent = "Network error. Try again.";
+    }
+  });
+</script>
+
 <section id="faq">
   <h2>FAQ</h2>
   <details><summary>How is this different from Jobscan, Teal, or Huntr?</summary>

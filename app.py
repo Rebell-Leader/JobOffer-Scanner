@@ -156,6 +156,29 @@ from utils.diff import inline_diff_html, unified_diff
 from utils.env import env_bool
 from utils.logging_setup import configure as configure_logging
 
+# Activation: a realistic sample posting new users can analyze in one click,
+# and a polished static verdict shown to anonymous visitors before signup.
+SAMPLE_POSTING = """\
+Company: Northwind Analytics
+Title: Senior Backend Engineer (Python)
+Location: Remote (EU time zones) · Berlin HQ
+Compensation: €85,000–105,000 + equity
+
+We're a Series B data-infrastructure company (≈120 people) building the
+pipeline layer that powers analytics for mid-market SaaS. You'll own services
+in Python and Go, design APIs, and improve reliability of a platform handling
+2B+ events/day on AWS + PostgreSQL + Kafka.
+
+Requirements:
+- 5+ years backend experience, strong Python; Go a plus
+- Distributed systems, PostgreSQL, message queues (Kafka/RabbitMQ)
+- Comfort with on-call and production ownership
+- Experience mentoring engineers
+
+Nice to have: Kubernetes, Terraform, event-driven architectures.
+Benefits: 30 days PTO, remote budget, conference stipend, stock options.
+"""
+
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
 
@@ -297,10 +320,45 @@ def _render_oauth_buttons() -> None:
     st.divider()
 
 
+def _render_sample_verdict_preview() -> None:
+    """A polished static verdict shown to anonymous visitors — see the value
+    in <60s before committing to a signup. Zero cost (no LLM call)."""
+    with st.expander("👀 See a sample verdict — no signup", expanded=True):
+        st.markdown(
+            "🟢 **Recommended** · confidence 8/10  \n"
+            "*Senior Backend Engineer · Northwind Analytics · Remote (EU)*"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(
+                "**🏢 Company stability** — _Positive_  \n"
+                "Series B, ~120 staff, actively hiring; no layoff signals in "
+                "recent news.\n\n"
+                "**💰 Salary vs market** — _Fair → strong_  \n"
+                "€85–105k sits around the 70th percentile for senior backend in "
+                "Berlin; comfortable against local cost of living."
+            )
+        with c2:
+            st.markdown(
+                "**🎯 ATS match** — _72%_  \n"
+                "Strong on Python/PostgreSQL/Kafka; add **Go** and **Terraform** "
+                "to your CV to close the gap.\n\n"
+                "**🚩 Red flags** — _None detected_  \n"
+                "On-call expected (normal for the role); equity terms unspecified "
+                "— verify at offer stage."
+            )
+        st.caption(
+            "This is an illustrative sample. Create a free account to run this "
+            "on the posting you're looking at right now — 5 free analyses, no "
+            "card required."
+        )
+
+
 def render_auth() -> None:
     if _handle_oauth_callback():
         return
     st.write("Sign in or create an account to save your analyses and track applications.")
+    _render_sample_verdict_preview()
     _render_oauth_buttons()
     login_tab, register_tab, recover_tab = st.tabs(
         ["Sign in", "Create account", "Recover password"]
@@ -1065,6 +1123,24 @@ with analyze_tab:
 
     _render_background_card()
 
+    # First-run activation: a new user (no saved applications yet) gets a
+    # one-click "try a sample posting" so time-to-first-verdict is seconds, not
+    # a blank textarea. Best-effort — a count failure must not block the form.
+    try:
+        _is_new_user = not list_applications(st.session_state.user_id)
+    except Exception:  # noqa: BLE001
+        _is_new_user = False
+    if _is_new_user:
+        with st.container(border=True):
+            st.markdown("**✨ New here? Try it on a sample posting.**")
+            st.caption(
+                "We'll drop a realistic Senior Backend Engineer posting into the "
+                "box below — just hit **Analyze** to see your first verdict."
+            )
+            if st.button("Use a sample posting", key="use_sample_posting"):
+                st.session_state["job_desc_input"] = SAMPLE_POSTING
+                st.rerun()
+
     with st.form("job_analysis_form"):
         model_choice = st.radio(
             "Analysis depth",
@@ -1090,6 +1166,7 @@ with analyze_tab:
                 "Job description",
                 height=240,
                 help="Paste the complete posting text here.",
+                key="job_desc_input",
             )
 
         st.markdown("**2. Your resume** _(optional — enables ATS match score)_")
