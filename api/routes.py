@@ -33,6 +33,7 @@ from services.applications import (
     save_analysis,
 )
 from services.auth import get_user
+from services.billing import TierLimitExceeded, clamp_model
 from services.master_cv import MasterCVError, get_master_cv, save_master_cv
 from services.rate_limit import RateLimitExceeded
 from services.usage import BudgetExceeded
@@ -129,22 +130,23 @@ def post_analyze(
     }
 
     # Enforce the same cost controls as the web/worker paths BEFORE any tokens
-    # are spent: request-count rate limit + rolling spend budget. Map to the
-    # conventional HTTP statuses (429 too-many, 402 payment-required).
+    # are spent: request-count rate limit + spend budget + tier quota. Map to
+    # the conventional HTTP statuses (429 too-many, 402 payment-required).
     try:
         check_user_quota(user_id)
     except RateLimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
-    except BudgetExceeded as exc:
+    except (BudgetExceeded, TierLimitExceeded) as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
 
     # run_analysis_sync opens the usage-accounting scope so this run's LLM
     # tokens/cost are attributed to the caller (the direct run_analysis call
-    # would ledger them with a NULL owner and skip the budget).
+    # would ledger them with a NULL owner and skip the budget). clamp_model
+    # downgrades "detailed" for tiers without detailed-model access.
     result = run_analysis_sync(
         body.job_posting,
         manual_inputs=manual,
-        model=body.model,
+        model=clamp_model(user_id, body.model),
         resume_text=body.resume_text,
         user_id=user_id,
     )

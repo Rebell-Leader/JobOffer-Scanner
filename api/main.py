@@ -19,8 +19,11 @@ from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
 
+from api.billing import router as billing_router
 from api.routes import router
 from api.security import add_security_headers
+from api.waitlist import landing_origin
+from api.waitlist import router as waitlist_router
 from db.session import init_db
 from utils.env import env_bool, env_int
 from utils.logging_setup import configure as configure_logging
@@ -42,6 +45,18 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
     app.include_router(router)
+    app.include_router(billing_router)
+    app.include_router(waitlist_router)
+    # CORS only for the public waitlist endpoint, scoped to the marketing-site
+    # origin (LANDING_ORIGIN). The authenticated API is same-origin / token-based
+    # and needs no CORS.
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[landing_origin()],
+        allow_methods=["POST"],
+        allow_headers=["Content-Type"],
+    )
     add_security_headers(app)
 
     @app.get("/healthz")

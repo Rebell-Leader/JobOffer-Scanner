@@ -155,6 +155,8 @@ def generate_tailored_cv(
     doesn't introduce facts missing from the sources; the result is stored in
     ``meta.constraint_check``.
     """
+    from services.billing import check_artifact_quota
+    check_artifact_quota(user_id)
     cv_raw, projects_text = _load_sources_or_raise(user_id)
     app = _application_for(user_id, application_id)
     job_context = _job_context(app)
@@ -192,6 +194,8 @@ def generate_cover_letter(
     accepted (passed verbatim to the prompt) so power users can supply their
     own descriptor.
     """
+    from services.billing import check_artifact_quota
+    check_artifact_quota(user_id)
     cv_raw, projects_text = _load_sources_or_raise(user_id)
     app = _application_for(user_id, application_id)
     job_context = _job_context(app)

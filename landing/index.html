@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobOffer Scanner — Stop applying to bad jobs</title>
+<meta name="description" content="Paste a job posting, get a Green/Yellow/Red verdict — company stability, real salary benchmark, ATS fit — before you waste an evening on the application. AI tailoring that provably cannot fabricate.">
+<meta property="og:title" content="JobOffer Scanner — Stop applying to bad jobs">
+<meta property="og:description" content="Paste a posting, get a verdict: company stability, salary benchmark, ATS fit. AI CV tailoring that provably can't lie.">
+<meta property="og:type" content="website">
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a30; --panel2:#0e1528; --text:#e8ecf6; --muted:#9aa7c4;
+    --green:#34d399; --yellow:#fbbf24; --red:#f87171; --accent:#6366f1; --accent2:#818cf8;
+    --border:#24304f; --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+  a{color:var(--accent2);text-decoration:none}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+  header{padding:22px 0;display:flex;justify-content:space-between;align-items:center}
+  .logo{font-weight:800;font-size:1.15rem;letter-spacing:-.02em}
+  .logo span{color:var(--accent2)}
+  nav a{color:var(--muted);margin-left:22px;font-size:.95rem}
+  nav a:hover{color:var(--text)}
+  .btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;border:1px solid var(--border);color:var(--text)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.ghost:hover{border-color:var(--accent2)}
+  /* hero */
+  .hero{padding:72px 0 48px;display:grid;grid-template-columns:1.1fr .9fr;gap:48px;align-items:center}
+  .hero h1{font-size:2.9rem;line-height:1.12;letter-spacing:-.03em;font-weight:800}
+  .hero h1 em{font-style:normal;background:linear-gradient(135deg,var(--accent2),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.sub{margin:18px 0 28px;color:var(--muted);font-size:1.12rem;max-width:34rem}
+  .hero .cta-row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .hero .note{color:var(--muted);font-size:.85rem;margin-top:12px}
+  /* verdict card demo */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:22px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+  .verdict-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .light{width:14px;height:14px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green)}
+  .verdict-head b{font-size:1.05rem}
+  .vrow{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--border);font-size:.93rem}
+  .vrow .k{color:var(--muted)}
+  .vrow .v.good{color:var(--green)} .vrow .v.warn{color:var(--yellow)}
+  .vfoot{margin-top:14px;font-size:.85rem;color:var(--muted)}
+  /* sections */
+  section{padding:60px 0}
+  h2{font-size:1.9rem;letter-spacing:-.02em;margin-bottom:10px}
+  .lead{color:var(--muted);max-width:42rem;margin-bottom:34px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .feat{background:var(--panel2);border:1px solid var(--border);border-radius:var(--radius);padding:22px}
+  .feat .ico{font-size:1.5rem}
+  .feat h3{margin:10px 0 6px;font-size:1.05rem}
+  .feat p{color:var(--muted);font-size:.92rem}
+  /* no-fabrication banner */
+  .guarantee{background:linear-gradient(135deg,rgba(99,102,241,.12),rgba(52,211,153,.10));border:1px solid var(--border);border-radius:var(--radius);padding:30px;display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:center}
+  .guarantee .shield{font-size:2.6rem}
+  .guarantee h3{font-size:1.25rem;margin-bottom:6px}
+  .guarantee p{color:var(--muted);font-size:.95rem;max-width:46rem}
+  /* pricing */
+  .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:stretch}
+  .plan{background:var(--panel2);border:1px solid var(--border);border-radius:var(--radius);padding:26px;display:flex;flex-direction:column}
+  .plan.hot{border-color:var(--accent);position:relative}
+  .plan.hot .tag{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:.72rem;font-weight:700;padding:3px 12px;border-radius:99px;letter-spacing:.04em}
+  .plan h3{font-size:1.05rem}
+  .price{font-size:2.1rem;font-weight:800;margin:8px 0 2px}
+  .price small{font-size:.85rem;color:var(--muted);font-weight:400}
+  .plan ul{list-style:none;margin:16px 0 22px;flex:1}
+  .plan li{padding:5px 0;color:var(--muted);font-size:.92rem}
+  .plan li b{color:var(--text);font-weight:600}
+  .plan li::before{content:"✓  ";color:var(--green)}
+  .plan li.no::before{content:"—  ";color:var(--muted)}
+  /* how */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;counter-reset:step}
+  .step{background:var(--panel2);border:1px solid var(--border);border-radius:var(--radius);padding:22px}
+  .step::before{counter-increment:step;content:counter(step);display:inline-flex;width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;align-items:center;justify-content:center;margin-bottom:12px}
+  .step h3{font-size:1rem;margin-bottom:6px}
+  .step p{color:var(--muted);font-size:.9rem}
+  /* faq + footer */
+  details{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:10px}
+  summary{cursor:pointer;font-weight:600}
+  details p{margin-top:10px;color:var(--muted);font-size:.93rem}
+  footer{border-top:1px solid var(--border);padding:34px 0;color:var(--muted);font-size:.88rem;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  @media(max-width:860px){
+    .hero{grid-template-columns:1fr;padding-top:40px}
+    .grid3,.plans,.steps{grid-template-columns:1fr}
+    .hero h1{font-size:2.2rem}
+    .guarantee{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">JobOffer <span>Scanner</span></div>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#faq">FAQ</a>
+    <a class="btn ghost" href="/app">Sign in</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div>
+    <h1>Stop applying to <em>bad jobs</em>.</h1>
+    <p class="sub">Paste a job posting. In under a minute you get a Green/Yellow/Red
+    verdict — company stability research, a real salary benchmark for the
+    location, and how well your CV actually matches — <b>before</b> you spend an
+    evening on the application.</p>
+    <div class="cta-row">
+      <a class="btn primary" href="/app">Analyze a posting — free</a>
+      <a class="btn ghost" href="#how">See how it works</a>
+    </div>
+    <p class="note">No credit card. 5 free analyses per month — try it on the posting you're looking at right now.</p>
+  </div>
+  <div class="card" aria-label="Example verdict">
+    <div class="verdict-head"><span class="light"></span><b>Recommended</b>&nbsp;<span style="color:var(--muted)">· confidence 8/10</span></div>
+    <div class="vrow"><span class="k">Company stability</span><span class="v good">Series C, hiring, no layoff signals</span></div>
+    <div class="vrow"><span class="k">Salary vs. market</span><span class="v good">Offer at 75th percentile for Berlin</span></div>
+    <div class="vrow"><span class="k">Cost of living fit</span><span class="v good">Comfortable at offered range</span></div>
+    <div class="vrow"><span class="k">ATS match</span><span class="v warn">68% — 4 missing keywords found</span></div>
+    <div class="vrow"><span class="k">Red flags</span><span class="v good">None detected</span></div>
+    <div class="vfoot">Senior Backend Engineer · Acme GmbH · analyzed in 42s</div>
+  </div>
+</section>
+
+<section id="how">
+  <h2>Your job search, with a filter</h2>
+  <p class="lead">Every other tool optimizes your resume. We answer the question that comes first: <b>is this job even worth your time?</b></p>
+  <div class="steps">
+    <div class="step"><h3>Paste a posting (or URL)</h3><p>Text, a link, or one click from LinkedIn/Indeed via the Chrome extension. JS-heavy boards handled.</p></div>
+    <div class="step"><h3>Get the verdict</h3><p>A multi-stage AI pipeline researches the company, benchmarks the compensation against the location, scores your CV against the requirements, and explains its reasoning.</p></div>
+    <div class="step"><h3>Apply with confidence</h3><p>Generate a tailored CV and cover letter from your real experience, track every stage to offer, and see your funnel analytics.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="guarantee">
+    <div class="shield">🛡️</div>
+    <div>
+      <h3>AI tailoring that provably cannot lie</h3>
+      <p>Every generated CV and cover letter passes a <b>deterministic post-check</b>: any
+      skill, year, percentage, or claim that isn't in <i>your</i> master CV, projects, or
+      the job posting gets flagged before you ever send it. Not a prompt promise — a
+      verifiable check you can see. No other AI resume tool offers this.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Everything between “found a posting” and “signed the offer”</h2>
+  <p class="lead"></p>
+  <div class="grid3">
+    <div class="feat"><div class="ico">🏢</div><h3>Company stability research</h3><p>News, layoffs and funding signals — with a keyless web-research fallback so you get real data even for obscure companies.</p></div>
+    <div class="feat"><div class="ico">💰</div><h3>Salary & cost-of-living benchmark</h3><p>Is the range fair for the role and the city? See where the offer sits before you negotiate.</p></div>
+    <div class="feat"><div class="ico">🎯</div><h3>ATS match scoring</h3><p>Keyword gaps between your CV and the posting, plus one-click “add skill” suggestions to your master CV.</p></div>
+    <div class="feat"><div class="ico">📋</div><h3>Pipeline tracking & analytics</h3><p>Stages from applied to offer, funnel conversion rates, time-in-stage, and where rejections actually happen.</p></div>
+    <div class="feat"><div class="ico">✉️</div><h3>Tailored CV & cover letters</h3><p>Generated from your master CV and project gallery, in your tone, fabrication-checked, exported to PDF.</p></div>
+    <div class="feat"><div class="ico">🔌</div><h3>API, webhooks & integrations</h3><p>REST API with bearer tokens, webhooks on stage changes, Telegram bot, Chrome extension.</p></div>
+  </div>
+</section>
+
+<section id="pricing">
+  <h2>Pricing</h2>
+  <p class="lead">Cheaper than one wasted application. Cancel anytime — and when you sign your offer, we’d love the cancellation.</p>
+  <div class="plans">
+    <div class="plan">
+      <h3>Free</h3>
+      <div class="price">$0<small>/month</small></div>
+      <ul>
+        <li><b>5 analyses</b> / month (fast model)</li>
+        <li><b>2 tailored documents</b> / month</li>
+        <li>Application tracker & analytics</li>
+        <li>Master CV + project gallery</li>
+        <li class="no">URL ingest for JS job boards</li>
+        <li class="no">API & webhooks</li>
+      </ul>
+      <a class="btn ghost" href="/app">Start free</a>
+    </div>
+    <div class="plan hot">
+      <span class="tag">MOST POPULAR</span>
+      <h3>Pro</h3>
+      <div class="price">$12<small>/month</small></div>
+      <ul>
+        <li><b>50 analyses</b> / month (detailed model)</li>
+        <li><b>30 tailored documents</b> / month</li>
+        <li>Everything in Free</li>
+        <li>URL ingest incl. LinkedIn/Indeed (hosted browser)</li>
+        <li>PDF export & sharing links</li>
+        <li class="no">API & webhooks</li>
+      </ul>
+      <a class="btn primary" href="/app?plan=pro">Get Pro</a>
+    </div>
+    <div class="plan">
+      <h3>Power</h3>
+      <div class="price">$24<small>/month</small></div>
+      <ul>
+        <li><b>200 analyses</b> / month (detailed model)</li>
+        <li><b>Unlimited</b> tailored documents</li>
+        <li>Everything in Pro</li>
+        <li>REST API + bearer tokens</li>
+        <li>Webhooks & Chrome extension</li>
+        <li>Priority support</li>
+      </ul>
+      <a class="btn ghost" href="/app?plan=power">Get Power</a>
+    </div>
+  </div>
+</section>
+
+<section id="waitlist">
+  <div class="card" style="text-align:center;padding:34px">
+    <h2 style="margin-bottom:8px">Not ready to sign up?</h2>
+    <p class="lead" style="margin:0 auto 20px">Get one email when we ship new
+    features and launch deals — no spam, unsubscribe anytime.</p>
+    <form id="wl-form" style="display:flex;gap:10px;max-width:440px;margin:0 auto;flex-wrap:wrap;justify-content:center">
+      <input id="wl-email" type="email" required placeholder="you@example.com"
+        style="flex:1;min-width:220px;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-size:1rem">
+      <button class="btn primary" type="submit">Keep me posted</button>
+    </form>
+    <p id="wl-msg" style="margin-top:12px;font-size:.9rem;color:var(--muted);min-height:1.2em"></p>
+  </div>
+</section>
+<script>
+  // The API base. Behind the recommended proxy the API is mounted at /api;
+  // override here if you host it elsewhere.
+  const API_BASE = "/api";
+  const form = document.getElementById("wl-form");
+  const msg = document.getElementById("wl-msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("wl-email").value.trim();
+    msg.textContent = "Adding you…";
+    try {
+      const r = await fetch(API_BASE + "/waitlist", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({email, source: "landing"}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        msg.style.color = "var(--green)";
+        msg.textContent = data.already
+          ? "You're already on the list — thanks!"
+          : "You're in. We'll be in touch.";
+        form.reset();
+      } else {
+        msg.style.color = "var(--red)";
+        msg.textContent = data.detail || "Something went wrong. Try again.";
+      }
+    } catch (err) {
+      msg.style.color = "var(--red)";
+      msg.textContent = "Network error. Try again.";
+    }
+  });
+</script>
+
+<section id="faq">
+  <h2>FAQ</h2>
+  <details><summary>How is this different from Jobscan, Teal, or Huntr?</summary>
+    <p>Those tools optimize your <i>artifacts</i> — resume keywords, LinkedIn profile, application volume.
+    JobOffer Scanner evaluates <i>the job itself</i>: whether the company is stable, whether the pay is fair
+    for the location, and whether you're actually a fit — before you invest the evening. Tailoring and
+    tracking are included, but the verdict comes first.</p></details>
+  <details><summary>What does “cannot fabricate” actually mean?</summary>
+    <p>After the AI drafts a tailored CV or cover letter, a deterministic (non-AI) check compares every
+    skill, year, percentage and quantitative claim in the output against your master CV, your project
+    gallery, and the job posting. Anything new is flagged for your review. The check is code, not a prompt —
+    it can't be sweet-talked.</p></details>
+  <details><summary>Where does the company data come from?</summary>
+    <p>News and layoff signals from structured sources where available, with an AI-directed web-search
+    fallback for companies those sources miss. Every briefing labels what's sourced vs. inferred and tells
+    you what to verify yourself. It's a research head-start, not an oracle.</p></details>
+  <details><summary>Do you store my CV? Can I delete everything?</summary>
+    <p>Your master CV lives in your account, encrypted in transit and access-scoped to you. You can export
+    your full data as JSON or delete the account (password-confirmed) at any time — deletion cascades
+    through everything.</p></details>
+  <details><summary>Can I self-host it?</summary>
+    <p>Yes — the project runs self-hosted with Docker Compose, with no plan limits when billing isn't
+    configured. The hosted version is for people who'd rather not run Postgres on a Tuesday night.</p></details>
+</section>
+
+<footer>
+  <div>© 2026 JobOffer Scanner</div>
+  <div>
+    <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> ·
+    <a href="mailto:hello@example.com">Contact</a>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>

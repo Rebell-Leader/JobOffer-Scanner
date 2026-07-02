@@ -21,21 +21,24 @@ logger = logging.getLogger(__name__)
 def check_user_quota(user_id: Optional[int]) -> None:
     """Enforce per-user limits before an analysis runs. ``None`` skips (bot/anon).
 
-    Two gates: a request-count rate limit (cheap brake on bursts) and, when
-    ``LLM_BUDGET_USD`` is configured, a token-spend budget over a rolling
-    window (``services/usage``). Either being exceeded blocks the run before
-    any tokens are spent.
+    Three gates, cheapest first: a request-count rate limit (brake on bursts),
+    the operator-level spend budget (``LLM_BUDGET_USD``), and — when billing is
+    enabled — the user's TIER quota (analyses per window + tier budget), which
+    also meters the analysis as one usage event. Any gate blocks the run
+    before tokens are spent. Lazy imports keep rate-limit-only callers free of
+    the DB-backed modules.
     """
     if user_id is None:
         return
     decision = ANALYSIS_LIMITER.check(str(user_id))
     if not decision.allowed:
         raise RateLimitExceeded(decision.retry_after)
-    # Spend budget (no-op unless LLM_BUDGET_USD is set). Lazy import keeps the
-    # rate-limit-only callers free of the DB-backed usage module.
     from services.usage import check_budget
 
     check_budget(user_id)
+    from services.billing import check_and_record_analysis
+
+    check_and_record_analysis(user_id)
 
 
 def async_enabled() -> bool:

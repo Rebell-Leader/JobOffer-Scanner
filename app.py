@@ -35,6 +35,7 @@ from services.background_analysis import (
 from services.background_analysis import (
     delete as delete_background_analysis,
 )
+from services.billing import TierLimitExceeded as BillingTierError
 from services.bulk_import import (
     BulkImportError,
     parse_applications_csv,
@@ -154,6 +155,29 @@ from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
 from utils.env import env_bool
 from utils.logging_setup import configure as configure_logging
+
+# Activation: a realistic sample posting new users can analyze in one click,
+# and a polished static verdict shown to anonymous visitors before signup.
+SAMPLE_POSTING = """\
+Company: Northwind Analytics
+Title: Senior Backend Engineer (Python)
+Location: Remote (EU time zones) · Berlin HQ
+Compensation: €85,000–105,000 + equity
+
+We're a Series B data-infrastructure company (≈120 people) building the
+pipeline layer that powers analytics for mid-market SaaS. You'll own services
+in Python and Go, design APIs, and improve reliability of a platform handling
+2B+ events/day on AWS + PostgreSQL + Kafka.
+
+Requirements:
+- 5+ years backend experience, strong Python; Go a plus
+- Distributed systems, PostgreSQL, message queues (Kafka/RabbitMQ)
+- Comfort with on-call and production ownership
+- Experience mentoring engineers
+
+Nice to have: Kubernetes, Terraform, event-driven architectures.
+Benefits: 30 days PTO, remote budget, conference stipend, stock options.
+"""
 
 # Page config
 st.set_page_config(page_title="AI Job Analysis Platform", page_icon="💼", layout="wide")
@@ -296,10 +320,45 @@ def _render_oauth_buttons() -> None:
     st.divider()
 
 
+def _render_sample_verdict_preview() -> None:
+    """A polished static verdict shown to anonymous visitors — see the value
+    in <60s before committing to a signup. Zero cost (no LLM call)."""
+    with st.expander("👀 See a sample verdict — no signup", expanded=True):
+        st.markdown(
+            "🟢 **Recommended** · confidence 8/10  \n"
+            "*Senior Backend Engineer · Northwind Analytics · Remote (EU)*"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(
+                "**🏢 Company stability** — _Positive_  \n"
+                "Series B, ~120 staff, actively hiring; no layoff signals in "
+                "recent news.\n\n"
+                "**💰 Salary vs market** — _Fair → strong_  \n"
+                "€85–105k sits around the 70th percentile for senior backend in "
+                "Berlin; comfortable against local cost of living."
+            )
+        with c2:
+            st.markdown(
+                "**🎯 ATS match** — _72%_  \n"
+                "Strong on Python/PostgreSQL/Kafka; add **Go** and **Terraform** "
+                "to your CV to close the gap.\n\n"
+                "**🚩 Red flags** — _None detected_  \n"
+                "On-call expected (normal for the role); equity terms unspecified "
+                "— verify at offer stage."
+            )
+        st.caption(
+            "This is an illustrative sample. Create a free account to run this "
+            "on the posting you're looking at right now — 5 free analyses, no "
+            "card required."
+        )
+
+
 def render_auth() -> None:
     if _handle_oauth_callback():
         return
     st.write("Sign in or create an account to save your analyses and track applications.")
+    _render_sample_verdict_preview()
     _render_oauth_buttons()
     login_tab, register_tab, recover_tab = st.tabs(
         ["Sign in", "Create account", "Recover password"]
@@ -510,6 +569,62 @@ _render_verification_gate()
 # ---------------------------------------------------------------------------
 
 st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
+
+with st.sidebar.expander("💳 Plan & usage"):
+    from services.billing import (
+        BillingError,
+        create_checkout_session,
+        create_portal_session,
+        plan_summary,
+    )
+    _plan = plan_summary(st.session_state.user_id)
+    if not _plan["billing_enabled"]:
+        st.caption("Self-hosted deployment — no plan limits.")
+    else:
+        st.markdown(f"**{_plan['label']} plan**")
+        _an_lim = _plan["analyses_limit"]
+        _ar_lim = _plan["artifacts_limit"]
+        st.caption(
+            f"Analyses: {_plan['analyses_used']}"
+            + (f" / {_an_lim}" if _an_lim >= 0 else " (unlimited)")
+            + f" · Tailored docs: {_plan['artifacts_used']}"
+            + (f" / {_ar_lim}" if _ar_lim >= 0 else " (unlimited)")
+            + f" · per {_plan['window_days']} days"
+        )
+        if _plan["tier"] == "free":
+            _up_col1, _up_col2 = st.columns(2)
+            with _up_col1:
+                if st.button("Upgrade to Pro", key="upgrade_pro"):
+                    try:
+                        _url = create_checkout_session(
+                            st.session_state.user_id, "pro",
+                            user_email=st.session_state.user_email,
+                        )
+                        st.session_state["checkout_url"] = _url
+                    except BillingError as exc:
+                        st.error(str(exc))
+            with _up_col2:
+                if st.button("Upgrade to Power", key="upgrade_power"):
+                    try:
+                        _url = create_checkout_session(
+                            st.session_state.user_id, "power",
+                            user_email=st.session_state.user_email,
+                        )
+                        st.session_state["checkout_url"] = _url
+                    except BillingError as exc:
+                        st.error(str(exc))
+            if st.session_state.get("checkout_url"):
+                st.link_button("→ Complete checkout", st.session_state["checkout_url"])
+        else:
+            if st.button("Manage billing", key="billing_portal"):
+                try:
+                    st.session_state["portal_url"] = create_portal_session(
+                        st.session_state.user_id
+                    )
+                except BillingError as exc:
+                    st.error(str(exc))
+            if st.session_state.get("portal_url"):
+                st.link_button("→ Open billing portal", st.session_state["portal_url"])
 
 with st.sidebar.expander("📜 My recent activity"):
     from services.audit import list_for_user as _list_audit
@@ -1008,6 +1123,24 @@ with analyze_tab:
 
     _render_background_card()
 
+    # First-run activation: a new user (no saved applications yet) gets a
+    # one-click "try a sample posting" so time-to-first-verdict is seconds, not
+    # a blank textarea. Best-effort — a count failure must not block the form.
+    try:
+        _is_new_user = not list_applications(st.session_state.user_id)
+    except Exception:  # noqa: BLE001
+        _is_new_user = False
+    if _is_new_user:
+        with st.container(border=True):
+            st.markdown("**✨ New here? Try it on a sample posting.**")
+            st.caption(
+                "We'll drop a realistic Senior Backend Engineer posting into the "
+                "box below — just hit **Analyze** to see your first verdict."
+            )
+            if st.button("Use a sample posting", key="use_sample_posting"):
+                st.session_state["job_desc_input"] = SAMPLE_POSTING
+                st.rerun()
+
     with st.form("job_analysis_form"):
         model_choice = st.radio(
             "Analysis depth",
@@ -1033,6 +1166,7 @@ with analyze_tab:
                 "Job description",
                 height=240,
                 help="Paste the complete posting text here.",
+                key="job_desc_input",
             )
 
         st.markdown("**2. Your resume** _(optional — enables ATS match score)_")
@@ -1115,16 +1249,22 @@ with analyze_tab:
             }
             selected_model = "detailed" if "Detailed" in model_choice else "fast"
 
-            # Quota check — runs BEFORE the LLM does any work. Covers both the
-            # request-count rate limit and the rolling spend budget.
+            # Quota check — runs BEFORE the LLM does any work. Covers the
+            # request-count rate limit, the spend budget, and the plan tier.
             from services.analysis_runner import check_user_quota
+            from services.billing import TierLimitExceeded, clamp_model
             from services.rate_limit import RateLimitExceeded
             from services.usage import BudgetExceeded
             try:
                 check_user_quota(st.session_state.user_id)
-            except (RateLimitExceeded, BudgetExceeded) as exc:
+            except (RateLimitExceeded, BudgetExceeded, TierLimitExceeded) as exc:
                 st.error(str(exc))
                 st.stop()
+            # Free plan runs on the fast model; paid plans keep their choice.
+            clamped = clamp_model(st.session_state.user_id, selected_model)
+            if clamped != selected_model:
+                st.info("Detailed analysis is a paid-plan feature — running the fast model.")
+                selected_model = clamped
 
             st.subheader("Analysis Progress")
             progress_bar = st.progress(0)
@@ -1633,7 +1773,7 @@ with applications_tab:
                                     )
                                     st.success(f"Saved tailored CV #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError) as exc:
                                     st.error(str(exc))
                     with art_col2:
                         # Tone preset for cover letters — persists per-application
@@ -1656,7 +1796,7 @@ with applications_tab:
                                     )
                                     st.success(f"Saved cover letter #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError) as exc:
                                     st.error(str(exc))
 
                 # List existing artifacts (newest first).

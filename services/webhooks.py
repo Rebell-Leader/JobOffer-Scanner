@@ -112,6 +112,13 @@ def register_webhook(user_id: int, url: str, events: List[str]) -> WebhookRecord
     url = (url or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         raise WebhookError("Webhook URL must start with http:// or https://")
+    # SSRF guard: deliveries POST server-side — refuse endpoints that resolve
+    # to private/internal addresses. SSRF_ALLOW_PRIVATE_URLS=1 disables (e.g.
+    # self-hosted deployments delivering to a localhost receiver).
+    from utils.security import check_url_allowed
+    ok, reason = check_url_allowed(url)
+    if not ok:
+        raise WebhookError(reason)
     bad = [e for e in events if e not in WEBHOOK_EVENTS]
     if bad:
         raise WebhookError(f"Unknown event(s): {', '.join(bad)}")

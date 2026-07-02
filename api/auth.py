@@ -33,4 +33,14 @@ def require_user(
             detail="Invalid or revoked API token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Tier gate: REST API access is a paid-plan feature when billing is
+    # enabled; a no-op for self-hosted deployments (no Stripe key => unlimited
+    # tier). 402 (not 403) so clients can distinguish "upgrade" from "denied".
+    from services.billing import api_access_allowed
+
+    if not api_access_allowed(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="API access requires the Power plan. Upgrade to use the REST API.",
+        )
     return user_id
