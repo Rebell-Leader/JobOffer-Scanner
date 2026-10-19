@@ -33,11 +33,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install deps + type stubs
+      # Type-check against the locked versions Replit installs (uv sync), not
+      # whatever pip resolves today: unpinned numpy 2.5 stubs use 3.12-only
+      # syntax that mypy rejects under python_version = 3.11, and drift like
+      # that should never be what turns the gate red.
+      - name: Lockfile matches pyproject
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[telegram,worker,dev]"
-      - run: mypy
+          python -m pip install --upgrade pip "uv>=0.5"
+          uv lock --check
+      - name: Install locked deps + type stubs
+        run: uv sync --frozen --python python3.12 --extra telegram --extra worker --extra dev
+      - run: .venv/bin/mypy
 
   security:
     name: bandit + pip-audit
