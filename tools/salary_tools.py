@@ -15,11 +15,6 @@ import json
 import logging
 import re
 
-try:
-    from langchain_core.tools import Tool  # langchain >= 0.3
-except ImportError:  # pragma: no cover - older langchain layout
-    from langchain.tools import Tool  # type: ignore[attr-defined,no-redef]
-
 from tools.data_sources import fetch_cost_of_living, fetch_salary_benchmark
 from utils.cache import cache
 from utils.llm import get_completion
@@ -179,27 +174,6 @@ def _web_salary_research(job_title, location, experience_level):
     return text
 
 
-def analyze_compensation_package(salary_details, model="detailed"):
-    """Analyze the full compensation package including benefits."""
-    prompt = f"""
-Analyze the following compensation package: base, bonus, equity, benefits,
-retirement, health, and perks.
-
-Package details:
-{salary_details}
-
-Provide:
-1. Total monetary value (label any figure you estimate as ESTIMATE).
-2. Comparison to industry standards (qualitative — no fabricated benchmarks).
-3. Strengths of the package.
-4. Weaknesses or missing components.
-5. Three concrete negotiation suggestions.
-
-Format as a markdown report with clear section headings.
-"""
-    return get_completion(prompt, model)
-
-
 # ---------------------------------------------------------------------------
 # Heuristic estimators (internal, NOT market data)
 # ---------------------------------------------------------------------------
@@ -357,17 +331,3 @@ def _simulated_rent_index(city):
             if known in city.lower():
                 return index
     return 50
-
-
-salary_tools = [
-    Tool(
-        name="estimate_salary_range",
-        func=estimate_salary_range,
-        description="Estimates salary range for a given job (heuristic, not benchmark)",
-    ),
-    Tool(
-        name="analyze_compensation_package",
-        func=analyze_compensation_package,
-        description="Analyzes full compensation package",
-    ),
-]

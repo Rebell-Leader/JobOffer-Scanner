@@ -30,6 +30,7 @@ from db.models import (
 )
 from db.session import get_session
 from services._ownership import require_owned
+from utils.features import enabled as feature_enabled
 
 
 class StageError(ValueError):
@@ -141,18 +142,19 @@ def add_stage(
 
     # Fire the webhook from the SERVICE so every entry point (UI, API, bot)
     # delivers it — it previously lived only in the Streamlit handler.
-    # Best-effort: dispatch_event_durable never raises into the caller.
-    from services.webhooks import dispatch_event_durable
-    dispatch_event_durable(
-        user_id, "stage.added",
-        {
-            "application_id": application_id,
-            "company_name": company_name,
-            "job_title": job_title,
-            "stage": record.kind,
-            "occurred_on": record.occurred_on.isoformat(),
-        },
-    )
+    if feature_enabled("webhooks"):  # off in personal mode
+        # Best-effort: dispatch_event_durable never raises into the caller.
+        from services.webhooks import dispatch_event_durable
+        dispatch_event_durable(
+            user_id, "stage.added",
+            {
+                "application_id": application_id,
+                "company_name": company_name,
+                "job_title": job_title,
+                "stage": record.kind,
+                "occurred_on": record.occurred_on.isoformat(),
+            },
+        )
     return record
 
 

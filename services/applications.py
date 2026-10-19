@@ -19,6 +19,7 @@ from sqlalchemy import desc, select
 from db.models import APPLICATION_STATUSES, Application
 from db.session import get_session
 from services._ownership import require_owned
+from utils.features import enabled as feature_enabled
 
 
 class ApplicationError(ValueError):
@@ -106,17 +107,18 @@ def save_analysis(
 
     # Fire the webhook from the service so the API save-on-analyze path delivers
     # it too (it previously fired only from the Streamlit save handler).
-    # Best-effort: dispatch_event_durable never raises into the caller.
-    from services.webhooks import dispatch_event_durable
-    dispatch_event_durable(
-        user_id, "application.saved",
-        {
-            "application_id": record.id,
-            "company_name": record.company_name,
-            "job_title": record.job_title,
-            "verdict": record.verdict,
-        },
-    )
+    if feature_enabled("webhooks"):  # off in personal mode
+        # Best-effort: dispatch_event_durable never raises into the caller.
+        from services.webhooks import dispatch_event_durable
+        dispatch_event_durable(
+            user_id, "application.saved",
+            {
+                "application_id": record.id,
+                "company_name": record.company_name,
+                "job_title": record.job_title,
+                "verdict": record.verdict,
+            },
+        )
     return record
 
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 import io
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional
 
 # Unicode TTF bundled with the repo (DejaVu: Latin incl. Polish/Czech/Turkish,
 # Cyrillic, Greek, arrows, bullets, €). The built-in Helvetica is Latin-1 only,
@@ -45,22 +45,6 @@ _HEADING_RE = re.compile(r"^(#{1,5})\s+(.*?)\s*#*\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 _HR_RE = re.compile(r"^-{3,}\s*$")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-
-
-def _split_inline_bold(text: str) -> List[Tuple[str, bool]]:
-    """Return ``[(segment, is_bold), …]`` so the renderer can switch fonts."""
-    pieces: List[Tuple[str, bool]] = []
-    last = 0
-    for m in _BOLD_RE.finditer(text):
-        if m.start() > last:
-            pieces.append((text[last:m.start()], False))
-        pieces.append((m.group(1), True))
-        last = m.end()
-    if last < len(text):
-        pieces.append((text[last:], False))
-    if not pieces:
-        pieces.append((text, False))
-    return pieces
 
 
 def _ascii_safe(text: str) -> str:

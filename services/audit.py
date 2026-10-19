@@ -99,11 +99,3 @@ def list_recent(limit: int = 100) -> List[AuditRecord]:
             .limit(limit)
         ).scalars().all()
         return [_to_record(r) for r in rows]
-
-
-def count_by_kind(kind: str, since: Optional[datetime] = None) -> int:
-    with get_session() as session:
-        q = select(AuditEvent).where(AuditEvent.kind == kind)
-        if since is not None:
-            q = q.where(AuditEvent.created_at >= since)
-        return len(session.execute(q).scalars().all())

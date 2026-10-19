@@ -60,6 +60,16 @@ def _resolve_database_url() -> str:
     return f"sqlite:///{_DEFAULT_SQLITE_PATH.as_posix()}"
 
 
+def describe_database() -> str:
+    """Human-readable location of the database, never including a password."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(_resolve_database_url())
+    if url.drivername.startswith("sqlite"):
+        return f"SQLite file {url.database}"
+    return url.render_as_string(hide_password=True)
+
+
 def get_engine() -> Engine:
     global _engine
     if _engine is None:

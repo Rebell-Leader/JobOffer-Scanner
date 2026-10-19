@@ -15,6 +15,7 @@ import logging
 from typing import Callable, Iterator, Optional
 
 from services.rate_limit import ANALYSIS_LIMITER, RateLimitExceeded
+from utils.features import enabled as feature_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +32,17 @@ def check_user_quota(user_id: Optional[int]) -> None:
     """
     if user_id is None:
         return
-    decision = ANALYSIS_LIMITER.check(str(user_id))
-    if not decision.allowed:
-        raise RateLimitExceeded(decision.retry_after)
+    if feature_enabled("rate_limits"):
+        decision = ANALYSIS_LIMITER.check(str(user_id))
+        if not decision.allowed:
+            raise RateLimitExceeded(decision.retry_after)
     from services.usage import check_budget
 
     check_budget(user_id)
-    from services.billing import check_and_record_analysis
+    if feature_enabled("billing"):
+        from services.billing import check_and_record_analysis
 
-    check_and_record_analysis(user_id)
+        check_and_record_analysis(user_id)
 
 
 @contextlib.contextmanager
@@ -56,12 +59,14 @@ def metered_llm(user_id: Optional[int], model: str = "detailed") -> Iterator[str
     from services.usage import account
 
     if user_id is not None:
-        from services.billing import check_llm_allowance, clamp_model
         from services.usage import check_budget
 
-        check_budget(user_id)
-        check_llm_allowance(user_id)
-        model = clamp_model(user_id, model)
+        check_budget(user_id)  # LLM_BUDGET_USD, a personal cap too
+        if feature_enabled("billing"):
+            from services.billing import check_llm_allowance, clamp_model
+
+            check_llm_allowance(user_id)
+            model = clamp_model(user_id, model)
     with account(user_id):
         yield model
 

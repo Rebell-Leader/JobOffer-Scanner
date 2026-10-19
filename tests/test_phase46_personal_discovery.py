@@ -434,3 +434,120 @@ class UnmigratedDatabaseTests(unittest.TestCase):
         # The Analyze tab renders after Discover: its submit button proves the
         # script wasn't halted by the missing tables.
         self.assertIn("🔍 Analyze posting", [b.label for b in at.button])
+
+
+_ISOLATION_PROBE = r"""
+import os, sys
+for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FEATHERLESS_API_KEY"):
+    os.environ.pop(k, None)
+os.environ["PERSONAL_MODE"] = "1"
+from db.session import reset_engine_for_testing
+reset_engine_for_testing("sqlite:///:memory:")
+from services.personal import ensure_local_owner
+ensure_local_owner()
+sys.modules.pop("services.auth", None)  # owner creation happens once, on first start
+from streamlit.testing.v1 import AppTest
+at = AppTest.from_file(sys.argv[1], default_timeout=60)
+at.run()
+assert not at.exception, [e.value for e in at.exception]
+side = [m for m in sys.modules if m.split(".")[0] in ("celery", "stripe", "telegram", "pyotp", "qrcode")
+        or m in ("services.auth", "services.webhooks", "services.telegram_link", "services.totp",
+                 "services.oauth", "services.background_analysis", "services.sharing",
+                 "services.notifications", "services.api_tokens", "services.email_verify",
+                 "worker.tasks", "worker.celery_app")]
+print("SIDE=" + ",".join(sorted(side)))
+"""
+
+
+@unittest.skipUnless(HAS_APPTEST, "streamlit AppTest harness unavailable")
+class PersonalModeIsolationTests(unittest.TestCase):
+    def test_side_features_are_not_imported(self):
+        """Fresh process: personal mode must not import accounts, 2FA, OAuth,
+        webhooks, Telegram, sharing, notifications, background jobs, billing SDKs."""
+        import subprocess
+
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        out = subprocess.run(
+            [sys.executable, "-c", _ISOLATION_PROBE, os.path.join(root, "app.py")],
+            cwd=root, capture_output=True, text=True, timeout=180,
+        )
+        line = next((l for l in out.stdout.splitlines() if l.startswith("SIDE=")), None)
+        self.assertIsNotNone(line, msg=out.stderr[-2000:])
+        self.assertEqual(line, "SIDE=", msg="side-feature modules loaded in personal mode")
+
+
+@unittest.skipUnless(HAS_APPTEST, "streamlit AppTest harness unavailable")
+class PersonalJourneyTests(unittest.TestCase):
+    """Personal mode, end to end: feed → track → stages → tailored CV → PDF."""
+
+    def setUp(self):
+        _fresh()
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FEATHERLESS_API_KEY", "LLM_PROVIDER"):
+            os.environ.pop(k, None)
+        self.env = mock.patch.dict(os.environ, {"PERSONAL_MODE": "1"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        from services.master_cv import save_master_cv
+        from services.personal import ensure_local_owner
+        from services.profile import save_profile
+        self.uid, _ = ensure_local_owner()
+        save_master_cv(self.uid, "Alex Kim\nSoftware Engineer at Initech (2019-2024)\n"
+                                 "Skills: Python, Django, PostgreSQL\n- Built billing APIs")
+        save_profile(self.uid, _profile())
+
+    def _app(self):
+        app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app.py"))
+        at = AppTest.from_file(app_path, default_timeout=60)
+        at.run()
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        return at
+
+    def _button(self, at, key):
+        return next((b for b in at.button if getattr(b, "key", None) == key), None)
+
+    def test_track_stage_and_tailor_flow(self):
+        from services import discovery
+        from services.applications import get_application
+        from services.stages import list_stages
+        from services.tailoring import list_artifacts
+
+        report = discovery.RefreshReport()
+        lead = _lead(company="Globex", title="Backend Engineer", description="Python and Django. " * 30)
+        with mock.patch.object(discovery, "gather", return_value=([("remotive:x", lead)], report)):
+            discovery.refresh_feed(self.uid, triage_limit=0)
+
+        at = self._app()
+        [job] = discovery.list_feed(self.uid)
+        self._button(at, f"disc_tr_{job.id}").click().run()       # 📌 Track
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        app_id = discovery.get_job(self.uid, job.id).application_id
+        self.assertIsNotNone(app_id)
+
+        self._button(at, f"qa_{app_id}_applied").click().run()      # stage quick-actions
+        self._button(at, f"qa_{app_id}_technical_interview").click().run()
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        self.assertEqual([s.kind for s in list_stages(self.uid, app_id)], ["applied", "technical_interview"])
+        self.assertEqual(get_application(self.uid, app_id).status, "interviewing")
+
+        # Tailored CV: the generated text claims a skill the CV lacks; the check must flag it.
+        with mock.patch("services.tailoring.get_completion",
+                        return_value="# Alex Kim\n## Skills\nPython, Django, Kubernetes"):
+            self._button(at, f"gen_cv_{app_id}").click().run()
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        [art] = list_artifacts(self.uid, app_id)
+        self.assertIn("kubernetes", art.meta["constraint_check"]["new_proper_nouns"])
+        at.checkbox(key=f"art_expand_{art.id}").check().run()       # open the artifact
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        self.assertTrue(any("Review recommended" in w.value and "kubernetes" in w.value
+                            for w in at.warning))
+        # Markdown + PDF downloads rendered for this artifact (PDF built OK).
+        ids = " ".join(str(d.proto.id) for d in at.get("download_button"))
+        self.assertIn(f"art_dl_pdf_{art.id}", ids)
+        self.assertIn(f"art_dl_md_{art.id}", ids)
+
+        with mock.patch("services.tailoring.get_completion",
+                        return_value="Dear Hiring Manager,\n\nI built billing APIs in Python at Initech."):
+            self._button(at, f"gen_cl_{app_id}").click().run()
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        kinds = sorted(a.kind for a in list_artifacts(self.uid, app_id))
+        self.assertEqual(kinds, ["cover_letter", "tailored_cv"])

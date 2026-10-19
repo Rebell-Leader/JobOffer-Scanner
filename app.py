@@ -20,22 +20,6 @@ from services.applications import (
     save_analysis,
     update_status,
 )
-from services.auth import (
-    AuthError,
-    authenticate_user,
-    change_password,
-    complete_password_reset,
-    register_user,
-    request_password_reset,
-)
-from services.background_analysis import (
-    BackgroundAnalysisError,
-    refresh_all_pending,
-    submit_background_analysis,
-)
-from services.background_analysis import (
-    delete as delete_background_analysis,
-)
 from services.billing import TierLimitExceeded as BillingTierError
 from services.bulk_import import (
     BulkImportError,
@@ -66,12 +50,8 @@ from services.master_cv import (
     save_master_cv,
     save_master_cv_from_upload,
 )
-from services.notifications import (
-    notify_stage_added,
-    send_password_reset_email,
-)
 from services.pdf_export import PDFExportError, markdown_to_pdf
-from services.personal import ensure_local_owner, personal_mode
+from services.personal import ensure_local_owner
 from services.projects import (
     ProjectError,
     create_project,
@@ -105,61 +85,92 @@ from services.tailoring import (
     list_artifacts,
     recheck_artifact,
 )
-from services.telegram_link import (
-    TelegramLinkError,
-    get_link,
-    issue_binding_token,
-    set_notify_on_stage,
-    unlink,
-)
 from services.timeline import (
     STAGE_COLORS,
     cross_application_swimlane,
     per_application_timeline,
     points_to_records,
 )
-from services.totp import (
-    TOTPError,
-)
-from services.totp import (
-    confirm_setup as totp_confirm_setup,
-)
-from services.totp import (
-    disable as totp_disable,
-)
-from services.totp import (
-    is_enabled as totp_is_enabled,
-)
-from services.totp import (
-    remaining_backup_codes as totp_backup_codes_left,
-)
-from services.totp import (
-    start_setup as totp_start_setup,
-)
-from services.totp import (
-    verify_login as totp_verify_login,
-)
 from services.usage import BudgetExceeded
-from services.webhooks import (
-    WebhookError,
-    delete_webhook,
-    list_webhooks,
-    register_webhook,
-)
-from services.webhooks import (
-    list_deliveries as list_webhook_deliveries,
-)
-from services.webhooks import (
-    set_active as set_webhook_active,
-)
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from ui.discover import render_discover_tab
+from ui.personal import render_personal_sidebar
 from ui.profile import render_profile_editor
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
 from utils.env import env_bool, env_str
+from utils.features import enabled as feature_enabled
+from utils.features import personal_mode
 from utils.logging_setup import configure as configure_logging
+
+# Personal mode (PERSONAL_MODE=1): one local owner, core features only. The
+# hosted product's side features (accounts, 2FA, background jobs, webhooks,
+# Telegram, notifications) are imported only when they can run; see
+# utils/features.py.
+PERSONAL_MODE = personal_mode()
+
+if not PERSONAL_MODE:
+    from services.auth import (
+        AuthError,
+        authenticate_user,
+        change_password,
+        complete_password_reset,
+        register_user,
+        request_password_reset,
+    )
+    from services.background_analysis import (
+        BackgroundAnalysisError,
+        refresh_all_pending,
+        submit_background_analysis,
+    )
+    from services.background_analysis import (
+        delete as delete_background_analysis,
+    )
+    from services.notifications import (
+        notify_stage_added,
+        send_password_reset_email,
+    )
+    from services.telegram_link import (
+        TelegramLinkError,
+        get_link,
+        issue_binding_token,
+        set_notify_on_stage,
+        unlink,
+    )
+    from services.totp import (
+        TOTPError,
+    )
+    from services.totp import (
+        confirm_setup as totp_confirm_setup,
+    )
+    from services.totp import (
+        disable as totp_disable,
+    )
+    from services.totp import (
+        is_enabled as totp_is_enabled,
+    )
+    from services.totp import (
+        remaining_backup_codes as totp_backup_codes_left,
+    )
+    from services.totp import (
+        start_setup as totp_start_setup,
+    )
+    from services.totp import (
+        verify_login as totp_verify_login,
+    )
+    from services.webhooks import (
+        WebhookError,
+        delete_webhook,
+        list_webhooks,
+        register_webhook,
+    )
+    from services.webhooks import (
+        list_deliveries as list_webhook_deliveries,
+    )
+    from services.webhooks import (
+        set_active as set_webhook_active,
+    )
 
 # Activation: a realistic sample posting new users can analyze in one click,
 # and a polished static verdict shown to anonymous visitors before signup.
@@ -202,7 +213,7 @@ init_db()
 # ---------------------------------------------------------------------------
 
 share_token = st.query_params.get("share")
-if share_token:
+if share_token and feature_enabled("sharing"):
     from services.sharing import ShareError, get_view
 
     st.title("📄 Shared job analysis")
@@ -496,8 +507,6 @@ def render_auth() -> None:
                     st.error(str(exc))
 
 
-PERSONAL_MODE = personal_mode()
-
 if "user_id" not in st.session_state:
     if PERSONAL_MODE:
         # Single local owner: no sign-up, login, 2FA or billing screens.
@@ -581,7 +590,7 @@ if not PERSONAL_MODE:
 # ---------------------------------------------------------------------------
 
 if PERSONAL_MODE:
-    st.sidebar.markdown("👤 **Personal mode** · local, single user")
+    render_personal_sidebar(st.session_state.user_id)
 else:
     st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
 
@@ -1153,7 +1162,7 @@ with analyze_tab:
         completed task, we hand it off to ``session_state`` so the main script
         rerun picks it up and renders it via ``render_result``.
         """
-        if not async_enabled():
+        if not (feature_enabled("background") and async_enabled()):
             return  # nothing to show when the queue isn't configured
         backgrounds = refresh_all_pending(st.session_state.user_id)
         if not backgrounds:
@@ -1281,7 +1290,7 @@ with analyze_tab:
                     help="What the posting itself says — leave blank if unspecified.",
                 )
 
-        if async_enabled():
+        if (feature_enabled("background") and async_enabled()):
             run_background = st.checkbox(
                 "Run in background (returns immediately; pick up the result here later)",
                 value=False,
@@ -1818,9 +1827,11 @@ with applications_tab:
                             )
                             # Best-effort Telegram notification — never raises.
                             # (The stage.added webhook fires inside add_stage.)
-                            notify_stage_added(
-                                st.session_state.user_id, rec, new_stage,
-                            )
+                            if feature_enabled("notifications"):
+                                if feature_enabled("notifications"):
+                                    notify_stage_added(
+                                        st.session_state.user_id, rec, new_stage,
+                                    )
                             st.rerun()
                         except StageError as exc:
                             st.error(str(exc))
@@ -2106,16 +2117,18 @@ with applications_tab:
                                 except PDFExportError as exc:
                                     st.caption(f"PDF disabled: {exc}")
 
-                # ----- Share links -----
-                from services.sharing import (
-                    ShareError,
-                    create_share,
-                    list_shares_for_application,
-                )
-                from services.sharing import (
-                    revoke as revoke_share,
-                )
-                if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):
+                # ----- Share links (side feature) -----
+                if feature_enabled("sharing") and st.checkbox(
+                    "🔗 Share read-only link", key=f"share_expand_{rec.id}"
+                ):
+                    from services.sharing import (
+                        ShareError,
+                        create_share,
+                        list_shares_for_application,
+                    )
+                    from services.sharing import (
+                        revoke as revoke_share,
+                    )
                     base_url = env_str("APP_BASE_URL", "").rstrip("/")
                     existing_shares = list_shares_for_application(
                         st.session_state.user_id, rec.id,

@@ -68,21 +68,6 @@ class PDFExportTests(unittest.TestCase):
         out = markdown_to_pdf("")
         self.assertTrue(bytes(out[:5]) == b"%PDF-")
 
-    def test_heading_and_inline_bold_parsing(self):
-        from services.pdf_export import _HEADING_RE, _split_inline_bold
-
-        m = _HEADING_RE.match("### Senior ML Engineer — Acme")
-        self.assertIsNotNone(m)
-        self.assertEqual(len(m.group(1)), 3)
-        self.assertIn("Senior ML Engineer", m.group(2))
-
-        segs = _split_inline_bold("Use **Python** and **PyTorch** here.")
-        # Five segments: "Use ", "Python", " and ", "PyTorch", " here."
-        bolds = [s for s, b in segs if b]
-        plains = [s for s, b in segs if not b]
-        self.assertEqual(bolds, ["Python", "PyTorch"])
-        self.assertEqual(plains, ["Use ", " and ", " here."])
-
     def test_ascii_safe_replacements(self):
         from services.pdf_export import _ascii_safe
 
@@ -114,6 +99,27 @@ class PDFExportMissingDepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadingParseTests(unittest.TestCase):
+    def test_heading_parsing(self):
+        from services.pdf_export import _HEADING_RE
+
+        m = _HEADING_RE.match("### Senior ML Engineer — Acme")
+        self.assertIsNotNone(m)
+        self.assertEqual(len(m.group(1)), 3)
+        self.assertIn("Senior ML Engineer", m.group(2))
+
+    def test_inline_bold_markers_are_stripped(self):
+        import io
+
+        from pypdf import PdfReader
+
+        from services.pdf_export import markdown_to_pdf
+
+        text = PdfReader(io.BytesIO(markdown_to_pdf("Use **Python** here.", "t"))).pages[0].extract_text()
+        self.assertIn("Use Python here.", text)
+        self.assertNotIn("**", text)
 
 
 class UnicodeFontTests(unittest.TestCase):

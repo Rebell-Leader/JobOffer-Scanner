@@ -114,13 +114,6 @@ _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#./-]*")
 _ICON_GLYPH_RE = re.compile("[\ue000-\uf8ff\ufffd]")
 
 
-def _normalize_skill(skill: str) -> str:
-    """Lowercase and strip surrounding noise like '(Expert level)'."""
-    base = re.sub(r"\([^)]*\)", "", skill).strip().lower()
-    base = re.sub(r"\s+", " ", base)
-    return base
-
-
 # Spelling variants: any member of a group satisfies a requirement for another.
 _ALIAS_GROUPS = [
     {"kubernetes", "k8s"}, {"postgresql", "postgres"}, {"javascript", "js"},

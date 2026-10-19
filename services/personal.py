@@ -3,7 +3,8 @@
 With ``PERSONAL_MODE=1`` (``scripts/run_local.sh`` sets it) the web UI skips
 sign-up / login / 2FA / billing / tokens / webhooks / Telegram and runs as a
 single local owner account, created on first start. Quotas and rate limits
-don't apply: it's your machine and your API key.
+don't apply: it's your machine and your API key. Which subsystems are off is
+defined in ``utils/features.py``.
 
 The owner is an ordinary ``users`` row, so every service keeps its normal
 ownership checks, and switching personal mode off later keeps your data.
@@ -19,13 +20,9 @@ from sqlalchemy import select
 
 from db.models import User
 from db.session import get_session
-from utils.env import env_bool, env_str
+from utils.env import env_str
 
 _DEFAULT_OWNER_EMAIL = "me@personal.local"
-
-
-def personal_mode() -> bool:
-    return env_bool("PERSONAL_MODE")
 
 
 def owner_email() -> str:

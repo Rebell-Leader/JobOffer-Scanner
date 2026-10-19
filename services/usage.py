@@ -44,7 +44,7 @@ import json
 import logging
 from contextvars import ContextVar
 from datetime import datetime, timedelta
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -207,6 +207,29 @@ def spend_usd(user_id: int, window_seconds: Optional[int] = None) -> float:
             )
         ).scalar_one()
     return (total_micro or 0) / 1_000_000.0
+
+
+def spend_by_model(user_id: int, window_seconds: int) -> List[dict]:
+    """Per-model calls / tokens / estimated USD over the window, priciest first."""
+    cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
+    with get_session() as session:
+        rows = session.execute(
+            select(
+                LlmUsage.model,
+                func.count(),
+                func.coalesce(func.sum(LlmUsage.prompt_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.completion_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.cost_micro_usd), 0),
+            )
+            .where(LlmUsage.user_id == user_id, LlmUsage.created_at >= cutoff)
+            .group_by(LlmUsage.model)
+        ).all()
+    out = [
+        {"model": model, "calls": calls, "input_tokens": int(inp), "output_tokens": int(outp),
+         "usd": int(micro) / 1_000_000.0}
+        for model, calls, inp, outp, micro in rows
+    ]
+    return sorted(out, key=lambda r: r["usd"], reverse=True)
 
 
 def check_budget(user_id: Optional[int]) -> None:

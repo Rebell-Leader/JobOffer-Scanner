@@ -11,11 +11,6 @@ import json
 import logging
 from typing import Any, Dict
 
-try:
-    from langchain_core.tools import Tool  # langchain >= 0.3
-except ImportError:  # pragma: no cover - older langchain layout
-    from langchain.tools import Tool  # type: ignore[attr-defined,no-redef]
-
 from utils.cache import cache
 from utils.llm import get_completion, is_demo_mode
 from utils.security import wrap_untrusted
@@ -160,17 +155,3 @@ Rules:
 
     cache.set(cache_key, parsed)
     return parsed
-
-
-job_tools = [
-    Tool(
-        name="extract_job_details",
-        func=extract_job_details,
-        description="Extracts key details from a job posting",
-    ),
-    Tool(
-        name="analyze_requirements",
-        func=analyze_requirements,
-        description="Analyzes job requirements and provides insights",
-    ),
-]

@@ -426,7 +426,7 @@ round-trip requires running outside the allowlist (or adding these hosts to it).
 ## 🛠️ Technology Stack
 
 - **Frontend**: Streamlit
-- **Backend**: Python with LangChain/LangGraph
+- **Backend**: Python; a checkpointed multi-stage LLM pipeline (Anthropic / OpenAI / Featherless) with Claude web research
 - **AI Models**: Support for multiple LLMs (OpenAI, DeepSeek, Qwen)
 - **Caching**: In-memory caching system
 - **Architecture**: Agent-based orchestration pattern
