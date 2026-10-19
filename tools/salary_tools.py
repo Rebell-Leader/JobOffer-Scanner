@@ -36,7 +36,9 @@ def estimate_salary_range(
         job_title, location, experience_level,
     )
 
-    real_benchmark = fetch_salary_benchmark(job_title, location)
+    real_benchmark = fetch_salary_benchmark(job_title, location) or _web_salary_research(
+        job_title, location, experience_level
+    )
     real_col = fetch_cost_of_living(_extract_city(location))
     heuristic_salary = _get_heuristic_salary_data(job_title, location, experience_level)
     heuristic_col = _get_heuristic_cost_of_living(location)
@@ -60,17 +62,19 @@ def estimate_salary_range(
 
     if real_benchmark:
         salary_block = (
-            f"Adzuna market data (REAL, treat as primary signal):\n{real_benchmark}\n\n"
+            f"Market data (REAL: live postings or cited web research; treat as "
+            f"primary signal):\n{real_benchmark}\n\n"
             f"Heuristic estimate (internal model, for cross-check only — "
             f"prefer the Adzuna figures when they disagree):\n{heuristic_salary}"
         )
         primary_note = (
-            "Primary salary figures are from live Adzuna postings. The heuristic "
-            "below is a cross-check only — use Adzuna when they conflict."
+            "Primary salary figures are from live market data (Adzuna postings or "
+            "cited web research). The heuristic below is a cross-check only — "
+            "use the market data when they conflict, and keep its source links."
         )
         honesty_rule = (
-            "State up front which figures come from Adzuna postings and which "
-            "are estimates."
+            "State up front which figures come from market data (with sources) "
+            "and which are estimates."
         )
     else:
         salary_block = (
@@ -131,6 +135,48 @@ Use clear markdown headings.
     response = get_completion(prompt, model)
     cache.set(cache_key, response)
     return response
+
+
+_SALARY_RESEARCH_PROMPT = """\
+Find current market salary data for the role "{title}" ({level}) in
+{location}. Use web search: levels.fyi, Glassdoor, Payscale, Indeed salaries,
+StepStone / Gehalt.de / Kununu (DACH), Hays / Michael Page / Robert Walters
+salary guides (UK/EU), and public salary ranges in comparable job postings.
+
+Report in markdown:
+- Base salary: low / median / high in local currency (and EUR or USD).
+- Typical bonus / equity for this level, if found.
+- A bullet per data point: figure, source link, year.
+Say plainly when data is thin or only loosely comparable. No figures without
+a source.
+"""
+
+
+def _web_salary_research(job_title, location, experience_level):
+    """Cited salary data via Claude web search; None when unavailable."""
+    from utils.llm import web_research, web_research_available
+
+    if not web_research_available() or not job_title:
+        return None
+    key = f"webresearch:salary:{job_title}:{location}:{experience_level}".lower()
+    cached = cache.get(key)
+    if isinstance(cached, str):
+        return cached
+    try:
+        text, sources = web_research(
+            _SALARY_RESEARCH_PROMPT.format(
+                title=job_title, level=experience_level or "level not stated",
+                location=location or "the posting's location",
+            ),
+            max_searches=5, max_fetches=2,
+        )
+    except Exception as exc:  # noqa: BLE001 - heuristic fallback below
+        logger.warning("Web salary research failed for %s / %s: %s", job_title, location, exc)
+        return None
+    if sources:
+        text += "\n\nSources:\n" + "\n".join(f"- [{s['title']}]({s['url']})" for s in sources[:10])
+    cache.set(key, text)
+    return text
 
 
 def analyze_compensation_package(salary_details, model="detailed"):

@@ -157,7 +157,8 @@ def record_completion(
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
-    cost = estimate_cost_usd(model, prompt, completion)
+    # Per-call fees on top of tokens (e.g. Anthropic web search, $0.01/search).
+    cost = estimate_cost_usd(model, prompt, completion) + float(usage.get("extra_cost_usd") or 0)
     cost_micro = int(round(cost * 1_000_000))
     uid = user_id if user_id is not None else current_user()
 

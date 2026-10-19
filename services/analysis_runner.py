@@ -82,8 +82,12 @@ def run_analysis_sync(
     resume_text: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
     user_id: Optional[int] = None,
+    profile_text: Optional[str] = None,
 ) -> dict:
     """Run analysis in-process. Used by the interactive Streamlit flow.
+
+    ``profile_text`` defaults to the user's saved search profile, so every
+    entry point gets a personalised verdict without passing it explicitly.
 
     ``user_id`` (when given) opens a usage-accounting scope so every LLM call
     in the pipeline is attributed to that user for cost controls.
@@ -91,6 +95,10 @@ def run_analysis_sync(
     from agents.orchestrator import run_analysis
     from services.usage import account
 
+    if profile_text is None and user_id is not None:
+        from services.profile import get_profile, profile_as_prompt
+
+        profile_text = profile_as_prompt(get_profile(user_id))
     with account(user_id):
         return run_analysis(
             job_posting,
@@ -98,6 +106,7 @@ def run_analysis_sync(
             model=model,
             progress_callback=progress_callback,
             resume_text=resume_text,
+            profile_text=profile_text,
         )
 
 

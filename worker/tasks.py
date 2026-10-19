@@ -30,6 +30,11 @@ def analyze_payload(
     """
     from services.usage import account
 
+    profile_text = None
+    if user_id is not None:
+        from services.profile import get_profile, profile_as_prompt
+
+        profile_text = profile_as_prompt(get_profile(user_id))
     with account(user_id):
         result = run_analysis(
             job_posting,
@@ -37,6 +42,7 @@ def analyze_payload(
             model=model,
             progress_callback=None,
             resume_text=resume_text,
+            profile_text=profile_text,
         )
     result.pop("progress_callback", None)
     return result

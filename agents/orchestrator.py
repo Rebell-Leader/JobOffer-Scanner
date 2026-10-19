@@ -36,6 +36,7 @@ class JobAnalysisState(TypedDict, total=False):
     model: Optional[str]
     progress_callback: Optional[Callable]
     checkpoint_key: Optional[str]
+    profile_text: Optional[str]
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +202,13 @@ def run_analysis(
     progress_callback: Optional[Callable] = None,
     resume_text: Optional[str] = None,
     checkpoint_key: Optional[str] = None,
+    profile_text: Optional[str] = None,
 ) -> dict:
     """Run the analysis pipeline.
+
+    ``profile_text`` (the candidate's search profile, see services/profile)
+    personalises the report: a "Fit for You" section and a verdict that
+    weighs dealbreakers and the salary floor.
 
     ``checkpoint_key`` opt-in: when present, completed stages are read from
     (and new completions written to) the in-process checkpoint store. A retry
@@ -226,6 +232,7 @@ def run_analysis(
         "model": model,
         "progress_callback": progress_callback,
         "checkpoint_key": checkpoint_key,
+        "profile_text": profile_text or "",
     }
 
     if progress_callback:

@@ -799,3 +799,69 @@ class WaitlistEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
+
+
+class CandidateProfile(Base):
+    """What the user is looking for: target roles, locations, salary floor,
+    must-haves and dealbreakers. Drives personalised verdicts, tailoring and
+    job discovery. One row per user; the fields live in ``data`` (JSON) so the
+    profile can grow without a migration per field (see services/profile.py).
+    """
+
+    __tablename__ = "candidate_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+# Lifecycle of a discovered job in the feed.
+DISCOVERED_JOB_STATUSES = ("new", "saved", "dismissed")
+
+
+class DiscoveredJob(Base):
+    """A posting found by job discovery (ATS boards, job-board APIs, web
+    search), deduplicated per user by ``dedupe_key``.
+
+    ``match_score`` is the deterministic pre-rank (title / skills / location /
+    salary vs. the profile); ``fit_score`` + ``fit_summary`` + ``fit_flags``
+    come from the cheap-model triage. ``application_id`` links a job the user
+    saved to the tracker.
+    """
+
+    __tablename__ = "discovered_jobs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedupe_key", name="uq_discovered_jobs_user_dedupe"),
+        Index("ix_discovered_jobs_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_id: Mapped[Optional[str]] = mapped_column(String(255))
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[Optional[str]] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    company: Mapped[Optional[str]] = mapped_column(String(255))
+    location: Mapped[Optional[str]] = mapped_column(String(255))
+    remote: Mapped[Optional[bool]] = mapped_column(Boolean)
+    posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    salary_text: Mapped[Optional[str]] = mapped_column(String(255))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    match_score: Mapped[Optional[int]] = mapped_column(Integer)
+    fit_score: Mapped[Optional[int]] = mapped_column(Integer)
+    fit_summary: Mapped[Optional[str]] = mapped_column(Text)
+    fit_flags: Mapped[Optional[list]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")
+    application_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("applications.id", ondelete="SET NULL")
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

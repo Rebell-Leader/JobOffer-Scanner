@@ -264,10 +264,66 @@ def _format_results(results: List[dict]) -> str:
     return "\n".join(lines)
 
 
+_CLAUDE_RESEARCH_PROMPT = """\
+Research the company **{company}** for a job seeker deciding whether to apply
+or accept an offer. Use web search (and fetch a page when a snippet isn't
+enough). Cover, briefly:
+
+1. What they do and how they make money; size and locations.
+2. Funding stage, latest round / financial results, profitability signals.
+3. Layoffs, hiring freezes, restructurings or leadership changes in the last
+   18 months (with dates).
+4. Employee sentiment: Glassdoor, Kununu (DACH), Blind, Reddit — ratings and
+   recurring themes if found.
+5. Engineering/work culture and remote/hybrid policy.
+6. Red flags: lawsuits, regulatory trouble, scam reports, wage complaints.
+
+Rules: cite every fact inline as a markdown link to its source; write "not
+found" where you found nothing rather than guessing; prefer sources from the
+last 24 months and give dates.
+Start with exactly: "REAL DATA (web research) for {company}:"
+"""
+
+
+def claude_company_research(company: str) -> Optional[str]:
+    """Live, cited company research via Claude's server-side web tools.
+    Cached per company; None on failure (caller falls back)."""
+    from utils.cache import cache
+    from utils.llm import web_research
+
+    key = f"webresearch:company:{company.strip().lower()}"
+    cached = cache.get(key)
+    if isinstance(cached, str):
+        return cached
+    try:
+        text, sources = web_research(
+            _CLAUDE_RESEARCH_PROMPT.format(company=company), max_searches=6, max_fetches=2
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to keyless search
+        logger.warning("Claude company research failed for %s: %s", company, exc)
+        return None
+    if sources:
+        text += "\n\nSources:\n" + "\n".join(f"- [{s['title']}]({s['url']})" for s in sources[:12])
+    cache.set(key, text)
+    return text
+
+
 def agentic_company_research(company: str, model: str = "fast") -> Optional[str]:
-    """Keyless agentic web research for a company. Returns a synthesised
-    briefing string, or None when unavailable (caller uses its sentinel)."""
-    if not fallback_enabled() or not company:
+    """Web research for a company. Returns a synthesised briefing string, or
+    None when unavailable (caller uses its sentinel).
+
+    With an Anthropic key: Claude's own web search + fetch (cited, current).
+    Otherwise: LLM-proposed queries over keyless DuckDuckGo snippets.
+    """
+    if not company:
+        return None
+    from utils.llm import web_research_available
+
+    if web_research_available():
+        researched = claude_company_research(company)
+        if researched:
+            return researched
+    if not fallback_enabled():
         return None
 
     queries = build_queries(company, model)

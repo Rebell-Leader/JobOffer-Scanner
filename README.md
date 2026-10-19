@@ -442,18 +442,27 @@ cp .env.example .env        # set ANTHROPIC_API_KEY=... (or OPENAI_API_KEY=...)
 ```
 
 `run_local.sh` exports `.env` (nothing in the app reads `.env` by itself),
-applies Alembic migrations to `./data/joboffer.db`, and binds to localhost
-only. If you run `streamlit run app.py` directly, export your keys into the
-shell first or the app silently runs in demo mode.
+applies Alembic migrations to `./data/joboffer.db`, binds to localhost only,
+and starts in **personal mode**: no sign-up, login, billing or quotas; you're
+the single local owner (`PERSONAL_MODE=0` runs the multi-user product).
 
-**Usage:**
-- Register an account (no email server needed locally).
-- **CV & Projects** tab: upload or paste your master CV (every tailored
-  document is checked against it).
-- **Analyze a posting**: paste the text (most reliable) or a URL; optionally
-  attach your resume for the ATS match.
-- Save the analysis to **My Applications**, log stages, generate a tailored CV
-  or cover letter, review the "new facts" check, export PDF.
+**Personal job search, in order:**
+1. **📝 CV & Profile → 📄 Master CV**: upload or paste your full CV (the
+   source of truth every tailored document is checked against).
+2. **👤 Search profile**: *Draft from my master CV*, then set target roles,
+   locations / remote region, salary floor, must-haves, dealbreakers, and a
+   **company watchlist** (auto-detects their Greenhouse / Lever / Ashby /
+   SmartRecruiters board).
+3. **🔭 Discover**: *Refresh feed* pulls your watchlist + Arbeitnow, Remotive,
+   RemoteOK, HN "Who is hiring" (and Adzuna with a free key), filters and
+   ranks against your profile, and has Claude Haiku score fit for you.
+   *Search the web with Claude* finds postings beyond those sources.
+4. **Deep analysis** on the promising ones: live, cited company and salary
+   research (Claude web search), a "Fit for You" section and a verdict that
+   respects your dealbreakers and floor, and an ATS match against your CV.
+5. Save to **📌 My Applications**, log stages, generate a tailored CV / cover
+   letter (review the "new facts" check), export PDF; **📊 Analytics** tracks
+   your funnel.
 
 **Full stack (Docker Compose):** `docker compose up --build` (web + worker +
 Redis + Postgres + scheduler). See `docs/ASSESSMENT.md` for the current

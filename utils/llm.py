@@ -19,7 +19,7 @@ import logging
 import os
 import re
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from utils.env import env_bool, env_float, env_int
 
@@ -318,24 +318,171 @@ def _complete_anthropic(
     effort = os.getenv("ANTHROPIC_EFFORT", "").strip().lower()
     if effort:
         kwargs["output_config"] = {"effort": effort}
-    resp = client.messages.create(**kwargs)
-    parts = [
-        getattr(block, "text", "")
-        for block in resp.content
-        if getattr(block, "type", None) == "text"
-    ]
-    usage = None
-    u = getattr(resp, "usage", None)
-    if u is not None:
-        inp = getattr(u, "input_tokens", 0) or 0
-        out = getattr(u, "output_tokens", 0) or 0
-        usage = {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
-    text = "".join(parts).strip()
+    resp = _anthropic_create(client, kwargs)
+    text = _anthropic_text(resp)
+    usage = _anthropic_usage(resp)
     stop_reason = getattr(resp, "stop_reason", None)
     if stop_reason in ("max_tokens", "refusal") or not text:
         _record_usage("anthropic", model, usage)  # tokens were still billed
         raise LLMOutputError(_unusable_output_message(model, stop_reason, max_tokens))
     return text, usage
+
+
+# Server-side refusal fallback: a request a safety classifier declines is
+# re-run on Anthropic's recommended fallback model inside the same call.
+# Haiku 5.5 has no fallback, so it is never sent there.
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-sonnet-5-5", "claude-fable-5")
+_fallbacks_rejected = False  # set once if this account/endpoint refuses the beta
+
+
+def _anthropic_create(client, kwargs: dict):
+    """``messages.create`` with refusal fallbacks where the model supports them.
+
+    If the endpoint rejects the beta (e.g. a proxy via ANTHROPIC_BASE_URL),
+    fall back to a plain request and stop asking for the rest of the process,
+    so the opt-in can never take the app down. ANTHROPIC_REFUSAL_FALLBACK=0
+    turns it off.
+    """
+    global _fallbacks_rejected
+    use = (
+        not _fallbacks_rejected
+        and env_bool("ANTHROPIC_REFUSAL_FALLBACK", True)
+        and kwargs["model"].startswith(_FALLBACK_MODEL_PREFIXES)
+    )
+    if not use:
+        return client.messages.create(**kwargs)
+    try:
+        return client.beta.messages.create(
+            **kwargs, betas=[_FALLBACK_BETA], extra_body={"fallbacks": "default"}
+        )
+    except Exception as exc:  # noqa: BLE001 - narrowed below
+        status = getattr(exc, "status_code", None)
+        if status == 400 and "fallback" in str(exc).lower():
+            logger.warning("Refusal fallbacks unavailable here (%s); continuing without.", exc)
+            _fallbacks_rejected = True
+            return client.messages.create(**kwargs)
+        raise
+
+
+def _anthropic_text(resp) -> str:
+    return "".join(
+        getattr(block, "text", "") for block in resp.content
+        if getattr(block, "type", None) == "text"
+    ).strip()
+
+
+def _anthropic_usage(resp) -> UsageDict:
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return None
+    inp = getattr(u, "input_tokens", 0) or 0
+    out = getattr(u, "output_tokens", 0) or 0
+    usage: dict = {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
+    server = getattr(u, "server_tool_use", None)
+    searches = (getattr(server, "web_search_requests", 0) or 0) if server is not None else 0
+    if searches:
+        usage["web_search_requests"] = searches
+        usage["extra_cost_usd"] = searches * _WEB_SEARCH_USD
+    return usage
+
+
+# ---------------------------------------------------------------------------
+# Web research: Claude with server-side web search + fetch
+# ---------------------------------------------------------------------------
+
+# Anthropic web search is billed per search on top of tokens ($10 / 1,000).
+_WEB_SEARCH_USD = env_float("WEB_SEARCH_USD_PER_CALL", 0.01)
+# The dynamic-filtering tool versions (Claude writes code to filter results
+# before they hit the context) run on the Opus / Sonnet 5.x line, so web
+# research always uses the "detailed" tier rather than Haiku.
+_WEB_TOOLS_VERSION = "20260209"
+_MAX_PAUSE_CONTINUATIONS = 4
+
+
+class WebResearchUnavailable(RuntimeError):
+    """No provider with server-side web tools is configured (callers fall
+    back to keyless search or skip the step)."""
+
+
+def web_research_available() -> bool:
+    return get_active_provider() == "anthropic" and env_bool("WEB_RESEARCH", True)
+
+
+def web_research(
+    prompt: str,
+    system: Optional[str] = None,
+    max_searches: int = 5,
+    max_fetches: int = 3,
+    model: str = "detailed",
+) -> Tuple[str, List[dict]]:
+    """Answer ``prompt`` with live web search/fetch. Returns ``(text, sources)``
+    where sources are ``{"title", "url"}`` from search results and citations.
+
+    Raises :class:`WebResearchUnavailable` when no Anthropic key is configured
+    (or WEB_RESEARCH=0) and :class:`LLMOutputError` on truncated / refused
+    output. Every response is ledgered, including the per-search fee.
+    """
+    if not web_research_available():
+        raise WebResearchUnavailable("Web research needs ANTHROPIC_API_KEY (and WEB_RESEARCH not 0).")
+    from anthropic import Anthropic  # lazy import
+
+    resolved = resolve_model("anthropic", model)
+    tools: list = [{
+        "type": f"web_search_{_WEB_TOOLS_VERSION}", "name": "web_search", "max_uses": max_searches,
+    }]
+    if max_fetches:
+        tools.append({
+            "type": f"web_fetch_{_WEB_TOOLS_VERSION}", "name": "web_fetch", "max_uses": max_fetches,
+        })
+    # Server-tool turns are long; let the SDK retry transient errors itself.
+    client = Anthropic(timeout=max(_TIMEOUT_SECONDS, 600.0), max_retries=2)
+    messages: list = [{"role": "user", "content": prompt}]
+    texts: List[str] = []
+    sources: List[dict] = []
+    from utils.timing import timed_block
+
+    for _ in range(_MAX_PAUSE_CONTINUATIONS + 1):
+        with timed_block("llm.web_research", tags={"model": resolved}):
+            resp = _anthropic_create(client, {
+                "model": resolved, "max_tokens": DEFAULT_MAX_TOKENS,
+                "system": system or _DEFAULT_SYSTEM_PROMPT, "messages": messages, "tools": tools,
+            })
+        _record_usage("anthropic", resolved, _anthropic_usage(resp))
+        texts.append(_anthropic_text(resp))
+        sources.extend(_web_sources(resp))
+        if getattr(resp, "stop_reason", None) != "pause_turn":
+            break
+        # The server-side tool loop hit its iteration cap: send the paused
+        # turn back as-is and the API resumes it (no extra user message).
+        messages = [{"role": "user", "content": prompt}, {"role": "assistant", "content": resp.content}]
+
+    text = _strip_reasoning_tokens("\n".join(t for t in texts if t).strip())
+    stop_reason = getattr(resp, "stop_reason", None)
+    if stop_reason in ("max_tokens", "refusal") or not text:
+        raise LLMOutputError(_unusable_output_message(resolved, stop_reason, DEFAULT_MAX_TOKENS))
+    unique: Dict[str, dict] = {}
+    for src in sources:
+        unique.setdefault(src["url"], src)
+    return text, list(unique.values())
+
+
+def _web_sources(resp) -> List[dict]:
+    out: List[dict] = []
+    for block in resp.content:
+        kind = getattr(block, "type", None)
+        if kind == "web_search_tool_result":
+            content = getattr(block, "content", None)
+            for item in content if isinstance(content, list) else []:  # error = an object
+                url = getattr(item, "url", None)
+                if url:
+                    out.append({"title": getattr(item, "title", "") or url, "url": url})
+        elif kind == "text":
+            for cite in getattr(block, "citations", None) or []:
+                url = getattr(cite, "url", None)
+                if url:
+                    out.append({"title": getattr(cite, "title", "") or url, "url": url})
+    return out
 
 
 def _is_new_style_openai_model(model: str) -> bool:

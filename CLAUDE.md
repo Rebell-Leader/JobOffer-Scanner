@@ -22,6 +22,8 @@ Postgres); a `docker-compose.yml` runs the full multi-service stack.
 
 ```
 app.py                  Streamlit web UI (single entry; all tabs + sidebar)
+ui/                     New UI modules split out of app.py (discover tab,
+                        search-profile editor); app.py calls render_* funcs
 agents/                 LangGraph pipeline: orchestrator + per-stage agents
   orchestrator.py       Checkpoint-aware graph: job -> (company || salary) -> resume? -> report
   job_/company_/salary_/resume_analyzer.py, report_generator.py
@@ -213,6 +215,15 @@ same canned "TechCorp" text regardless of input) to the current product:
 
 ## Production-readiness roadmap (what's left)
 
+> **Personal mode** (`PERSONAL_MODE=1`, default in `scripts/run_local.sh`):
+> single local owner (`services/personal`), no auth/billing/quota UI. Search
+> profile in `services/profile` (JSON doc, table `candidate_profiles`) feeds
+> the report's "Fit for You" + verdict, discovery and triage. Job discovery:
+> connectors in `tools/job_sources` (public ATS + job-board APIs only),
+> pipeline in `services/discovery` (table `discovered_jobs`). Claude web
+> research (`utils/llm.web_research`, server-side web search/fetch) powers
+> company + salary research when an Anthropic key is set.
+>
 > **Superseded in part by `docs/ASSESSMENT.md` (2026-10-19)**: the current
 > verified state, remaining paid-launch blockers, and P1 backlog. Some items
 > marked ✅ below were not actually true at that point (e.g. 5

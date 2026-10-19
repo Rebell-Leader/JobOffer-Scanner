@@ -103,6 +103,21 @@ def build_export(user_id: int) -> dict:
         for p in list_projects(user_id)
     ]
 
+    from dataclasses import asdict
+
+    from services.discovery import list_feed
+    from services.profile import get_profile
+
+    bundle["search_profile"] = asdict(get_profile(user_id))
+    bundle["discovered_jobs"] = [
+        {"id": j.id, "source": j.source, "url": j.url, "title": j.title, "company": j.company,
+         "location": j.location, "status": j.status, "match_score": j.match_score,
+         "fit_score": j.fit_score, "fit_summary": j.fit_summary, "fit_flags": j.fit_flags,
+         "application_id": j.application_id, "first_seen_at": j.first_seen_at}
+        for status in ("new", "saved", "dismissed")
+        for j in list_feed(user_id, status=status, limit=10_000)
+    ]
+
     bundle["api_tokens"] = [
         {"id": t.id, "name": t.name, "prefix": t.prefix,
          "created_at": t.created_at, "last_used_at": t.last_used_at,

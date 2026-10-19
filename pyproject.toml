@@ -85,7 +85,7 @@ warn_unused_ignores = false
 check_untyped_defs = false
 # Scope: the app packages we actively maintain types for. Tests + migrations
 # are intentionally excluded (heavy mocking / generated code).
-files = ["services", "utils", "db", "tools", "agents", "api", "bot", "worker"]
+files = ["services", "utils", "db", "tools", "agents", "api", "bot", "worker", "ui"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "migrations", ".venv"]

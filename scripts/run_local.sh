@@ -30,6 +30,10 @@ fi
 
 mkdir -p data
 
+# Personal mode: no sign-up / login / billing / quotas; you're the single
+# local owner. PERSONAL_MODE=0 runs the multi-user product locally instead.
+export PERSONAL_MODE="${PERSONAL_MODE:-1}"
+
 # Alembic-managed schema from day one: create_all never adds columns to an
 # existing table, so a later `git pull` with a new model field would break an
 # unmigrated database. A pre-existing create_all-built SQLite DB (no

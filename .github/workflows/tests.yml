@@ -170,6 +170,8 @@ jobs:
               "webhooks", "webhook_deliveries", "oauth_identities",
               "email_verification_tokens", "llm_usage",
               "subscriptions", "usage_events", "waitlist_entries",
+              "candidate_profiles", "discovered_jobs", "master_cv_revisions",
+              "password_reset_tokens", "telegram_link_tokens",
           }
           missing = required - tables
           assert not missing, f"missing tables after migrate: {missing}"
