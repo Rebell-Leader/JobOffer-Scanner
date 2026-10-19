@@ -11,10 +11,21 @@ paste-only or go through the Chrome extension.
 ## Covered today (`tools/job_sources.py`)
 
 - **Company boards (watchlist):** Greenhouse, Lever (incl. the EU host),
-  Ashby, SmartRecruiters.
-- **Aggregators:** Arbeitnow, Remotive, RemoteOK, HN "Who is hiring",
-  Adzuna (key).
+  Ashby, SmartRecruiters, **Personio, Teamtailor (incl. custom domains),
+  Recruitee, Workable, Pinpoint, Softgarden**.
+- **Board detection:**
+  - **From the company's careers page** (reliable): reads which ATS the
+    page embeds.
+  - **By name:** returns every board answering to the name's slugs, with
+    sample titles to confirm. A slug isn't an identity: Lever's "iqm" is an
+    unrelated New York company.
+- **Aggregators:** **GermanTechJobs / SwissDevJobs / DevITjobs.uk** (salary
+  on every item; the feeds follow your profile's countries), Arbeitnow,
+  Remotive, RemoteOK, HN "Who is hiring", Adzuna (key).
 - **Open web:** Claude web search (`services.discovery.web_discover`).
+- **Watchlist title filter:** posts on your watchlist need only half of a
+  target title's core terms, so adjacent roles at companies you chose still
+  surface.
 
 Spot-checking real DE deeptech careers pages [V] shows much of the field is
 already reachable:
@@ -26,6 +37,9 @@ Agile Robots, OroraTech and UnternehmerTUM / TUM Venture Labs are on
 Personio.
 
 ## Next sources, in implementation order
+
+Items 1–7 shipped on 2026-10-20 (see above). Still to do: Reed, Workday, JOIN,
+and the remote-EU extras.
 
 | # | Source | Endpoint | Auth | Data | Terms | Effort |
 |---|---|---|---|---|---|---|

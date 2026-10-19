@@ -43,7 +43,7 @@ from utils.text import strip_code_fence
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCES = ("watchlist", "arbeitnow", "remotive", "remoteok", "hn")
+DEFAULT_SOURCES = ("watchlist", "devjobs", "arbeitnow", "remotive", "remoteok", "hn")
 TRIAGE_BATCH = 8
 _DESCRIPTION_CAP = 20_000
 
@@ -148,7 +148,7 @@ _US_ONLY = re.compile(
     re.IGNORECASE,
 )
 _WORLDWIDE = re.compile(r"worldwide|anywhere|global", re.IGNORECASE)
-_MONEY_RE = re.compile(r"(\d{1,3}(?:[,.\s]\d{3})+|\d+(?:\.\d+)?)\s*([kK])?")
+_MONEY_RE = re.compile(r"(\d{1,3}(?:[,.\s'’]\d{3})+|\d+(?:\.\d+)?)\s*([kK])?")
 _CURRENCIES = {"€": "EUR", "eur": "EUR", "£": "GBP", "gbp": "GBP", "$": "USD", "usd": "USD", "chf": "CHF"}
 
 
@@ -195,7 +195,7 @@ def parse_salary_max(text: str) -> Tuple[Optional[float], Optional[str]]:
     currency = next((code for sym, code in _CURRENCIES.items() if sym in text.lower()), None)
     values = []
     for num, k in _MONEY_RE.findall(text):
-        v = float(re.sub(r"[,.\s](?=\d{3}\b)", "", num).replace(",", ""))
+        v = float(re.sub(r"[,.\s'’](?=\d{3}\b)", "", num).replace(",", ""))
         if k:
             v *= 1000
         if re.search(r"per month|/month|monthly|/mo\b", text, re.IGNORECASE):
@@ -283,6 +283,16 @@ def _adzuna_countries(profile: CandidateProfile) -> List[str]:
     return list(dict.fromkeys(codes))[:3] or ["gb", "de"]
 
 
+def _devjobs_countries(profile: CandidateProfile) -> List[str]:
+    """DevJobs feeds for the profile's countries (all three when unknown, or
+    for remote-only searches, where any of them may hire remotely)."""
+    text = " ".join(profile.locations).lower()
+    codes = [c for p, c in _COUNTRY_CODES if re.search(p, text) and c in job_sources.DEVJOBS_FEEDS]
+    if not codes or profile.work_modes == ["remote"]:
+        return list(job_sources.DEVJOBS_FEEDS)
+    return list(dict.fromkeys(codes))
+
+
 def _search_terms(profile: CandidateProfile) -> List[str]:
     """Target titles without seniority words, as typed ("Senior ML Engineer" -> "ML Engineer")."""
     terms = [
@@ -309,6 +319,9 @@ def _source_tasks(profile: CandidateProfile, sources: Iterable[str]) -> List[Tup
         tasks.append(("remoteok", job_sources.remoteok))
     if "hn" in wanted:
         tasks.append(("hn", job_sources.hn_whos_hiring))
+    if "devjobs" in wanted:
+        for country in _devjobs_countries(profile):
+            tasks.append((f"devjobs:{country}", partial(job_sources.devjobs, country)))
     if "adzuna" in wanted and job_sources.adzuna_available():
         for country in _adzuna_countries(profile):
             for term in _search_terms(profile)[:2]:
@@ -337,10 +350,14 @@ def gather(profile: CandidateProfile, sources: Iterable[str]) -> Tuple[List[Tupl
 def prefilter(task: str, lead: JobLead, profile: CandidateProfile, now: Optional[datetime] = None) -> bool:
     if not lead.title or not lead.url:
         return False
-    targets = profile.target_titles or profile.search_keywords
-    if targets and title_match(lead.title, targets) < 0.66:
-        return False
     from_watchlist = task.split(":", 1)[0] in job_sources.BOARD_FETCHERS
+    targets = profile.target_titles or profile.search_keywords
+    # Companies on the watchlist were chosen deliberately, so adjacent roles
+    # there ("Quantum Engineer" for a software engineer) are worth a look:
+    # half the core title terms is enough; triage judges the actual fit.
+    threshold = 0.5 if from_watchlist else 0.66
+    if targets and title_match(lead.title, targets) < threshold:
+        return False
     if not from_watchlist and lead.posted_at:
         age = (now or datetime.utcnow()) - lead.posted_at
         if age > timedelta(days=profile.max_posting_age_days):

@@ -9,12 +9,20 @@ Company boards (the "watchlist"; structured, complete, current):
   * Lever           api.lever.co/v0/postings/{slug} (EU tenants: api.eu.lever.co)
   * Ashby           api.ashbyhq.com/posting-api/job-board/{slug}
   * SmartRecruiters api.smartrecruiters.com/v1/companies/{id}/postings
+  * Personio        {slug}.jobs.personio.de/xml (dominant DACH startup ATS)
+  * Teamtailor      {careers host}/jobs.rss (documented public feed)
+  * Recruitee       {slug}.recruitee.com/api/offers/ (has salary)
+  * Workable        apply.workable.com/api/v1/widget/accounts/{slug}?details=true
+  * Pinpoint        {slug}.pinpointhq.com/postings.json (has compensation)
+  * Softgarden      {slug}.career.softgarden.de/jobs.feed.json (schema.org feed)
+  See docs/JOB_SOURCES.md for terms and the sources deliberately not used.
 
 Aggregators (broad; each asks for a link back, which the feed shows):
   * Arbeitnow (EU, keyless)  * Remotive (remote; at most a few calls a day:
     cached 6h)  * RemoteOK (remote; credit the source)  * Hacker News
     "Who is hiring?" (monthly thread, via the Algolia HN API)
   * Adzuna (UK + EU countries; needs the free ADZUNA_APP_ID / ADZUNA_APP_KEY)
+  * GermanTechJobs / SwissDevJobs / DevITjobs.uk RSS (salary on every item)
 
 Responses are cached (utils.cache), so a feed refresh doesn't hammer the APIs.
 """
@@ -26,12 +34,16 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
+from defusedxml import ElementTree as SafeET
 
 from utils.cache import cache
 from utils.env import env_float
@@ -94,6 +106,35 @@ def _get_json(url: str, params: Optional[dict] = None) -> Any:
         return resp.json()
     except ValueError as exc:
         raise SourceError(f"{url}: not JSON") from exc
+
+
+def _get_xml(url: str, params: Optional[dict] = None) -> Any:
+    """Fetch and parse an XML/RSS feed. Parsed with defusedxml: the feeds are
+    third-party content, so entity-expansion and external-entity tricks are
+    rejected rather than processed."""
+    try:
+        resp = requests.get(url, params=params, timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT})
+    except requests.RequestException as exc:
+        raise SourceError(f"{url}: {exc}") from exc
+    if resp.status_code >= 400:
+        raise SourceError(f"{url}: HTTP {resp.status_code}")
+    try:
+        return SafeET.fromstring(resp.content)
+    except Exception as exc:  # noqa: BLE001 - ParseError / DefusedXmlException
+        raise SourceError(f"{url}: not a valid feed ({exc})") from exc
+
+
+def _xml_text(node: Any, path: str, ns: Optional[dict] = None) -> str:
+    found = node.find(path, ns) if node is not None else None
+    return (found.text or "").strip() if found is not None and found.text else ""
+
+
+def _rss_date(value: str) -> Optional[datetime]:
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return _parse_dt(value)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
 def _cached(key: str, ttl_seconds: float, fetch: Callable[[], List[JobLead]]) -> List[JobLead]:
@@ -308,11 +349,216 @@ def smartrecruiters(company_id: str, company: str = "") -> List[JobLead]:
     return _cached(f"smartrecruiters:{company_id.lower()}", 3600, fetch)
 
 
+def personio(slug: str, company: str = "") -> List[JobLead]:
+    slug = _check_slug(slug)
+
+    def fetch() -> List[JobLead]:
+        root = _get_xml(f"https://{slug}.jobs.personio.de/xml", {"language": "en"})
+        out = []
+        for pos in root.iter("position"):
+            pid = _xml_text(pos, "id")
+            offices = [_xml_text(pos, "office")] + [
+                (o.text or "").strip() for o in pos.findall("additionalOffices/office")
+            ]
+            sections = [
+                f"{_xml_text(d, 'name')}:\n{html_to_text(_xml_text(d, 'value'))}"
+                for d in pos.findall("jobDescriptions/jobDescription")
+            ]
+            location = ", ".join(o for o in dict.fromkeys(offices) if o)
+            out.append(JobLead(
+                source="personio", external_id=pid,
+                url=f"https://{slug}.jobs.personio.de/job/{pid}?language=en",
+                title=_xml_text(pos, "name"),
+                company=_xml_text(pos, "subcompany") or company or slug,
+                location=location, remote=_looks_remote(location),
+                posted_at=_parse_dt(_xml_text(pos, "createdAt")),
+                description="\n\n".join(sections),
+                tags=[t for t in (_xml_text(pos, "department"), _xml_text(pos, "seniority"),
+                                  _xml_text(pos, "schedule")) if t],
+            ))
+        return out
+
+    return _cached(f"personio:{slug.lower()}", 3600, fetch)
+
+
+_HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
+_TT_NS = {"tt": "https://teamtailor.com/locations"}
+
+
+def teamtailor(host: str, company: str = "") -> List[JobLead]:
+    """``host`` is the careers site: ``acme.teamtailor.com`` or a custom
+    domain (``careers.acme.com``); a bare slug means ``{slug}.teamtailor.com``."""
+    host = (host or "").strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+    if "." not in host:
+        host = f"{_check_slug(host)}.teamtailor.com"
+    if not _HOST_RE.match(host):
+        raise SourceError(f"Invalid careers host {host!r}.")
+    from utils.security import check_url_allowed
+
+    ok, reason = check_url_allowed(f"https://{host}/")  # custom domains are user input
+    if not ok:
+        raise SourceError(reason)
+
+    def fetch() -> List[JobLead]:
+        out: List[JobLead] = []
+        for offset in (0, 100, 200):
+            channel = _get_xml(
+                f"https://{host}/jobs.rss", {"offset": offset, "per_page": 100}
+            ).find("channel")
+            items = channel.findall("item") if channel is not None else []
+            name = company or _xml_text(channel, "title") or host.split(".")[0]
+            for it in items:
+                places = [
+                    ", ".join(p for p in (_xml_text(loc, "tt:city", _TT_NS),
+                                          _xml_text(loc, "tt:country", _TT_NS)) if p)
+                    for loc in it.findall("tt:locations/tt:location", _TT_NS)
+                ]
+                status = _xml_text(it, "remoteStatus").lower()
+                out.append(JobLead(
+                    source="teamtailor", external_id=_xml_text(it, "guid"), url=_xml_text(it, "link"),
+                    title=_xml_text(it, "title"), company=name,
+                    location="; ".join(p for p in places if p) or ("Remote" if status == "fully" else ""),
+                    remote=True if status in ("fully", "remote") else None,
+                    posted_at=_rss_date(_xml_text(it, "pubDate")),
+                    description=html_to_text(_xml_text(it, "description")),
+                    tags=[t for t in (_xml_text(it, "tt:department", _TT_NS),
+                                      _xml_text(it, "tt:role", _TT_NS), status) if t],
+                ))
+            if len(items) < 100:
+                break
+        return out
+
+    return _cached(f"teamtailor:{host}", 3600, fetch)
+
+
+def _range(lo: Any, hi: Any, currency: Any, period: Any = "") -> str:
+    if not (lo or hi):
+        return ""
+    amount = f"{lo}-{hi}" if lo and hi else str(lo or hi)
+    return " ".join(p for p in (str(currency or ""), amount, f"per {period}" if period else "") if p)
+
+
+def recruitee(slug: str, company: str = "") -> List[JobLead]:
+    slug = _check_slug(slug)
+
+    def fetch() -> List[JobLead]:
+        data = _get_json(f"https://{slug}.recruitee.com/api/offers/")
+        out = []
+        for o in data.get("offers", []):
+            sal = o.get("salary") or {}
+            out.append(JobLead(
+                source="recruitee", external_id=str(o.get("id")), url=o.get("careers_url", ""),
+                title=o.get("title", ""), company=o.get("company_name") or company or slug,
+                location=o.get("location") or ", ".join(p for p in (o.get("city"), o.get("country")) if p),
+                remote=True if o.get("remote") else None,
+                posted_at=_parse_dt(str(o.get("published_at") or "").replace(" UTC", "+00:00").replace(" ", "T", 1)),
+                salary=_range(sal.get("min"), sal.get("max"), sal.get("currency"), sal.get("period")),
+                description="\n\n".join(
+                    html_to_text(o.get(k) or "") for k in ("description", "requirements") if o.get(k)
+                ),
+                tags=[t for t in (o.get("department"), "hybrid" if o.get("hybrid") else "") if t],
+            ))
+        return out
+
+    return _cached(f"recruitee:{slug.lower()}", 3600, fetch)
+
+
+def workable(slug: str, company: str = "") -> List[JobLead]:
+    slug = _check_slug(slug)
+
+    def fetch() -> List[JobLead]:
+        data = _get_json(
+            f"https://apply.workable.com/api/v1/widget/accounts/{slug}", {"details": "true"}
+        )
+        out = []
+        for j in data.get("jobs", []):
+            places = [
+                ", ".join(p for p in (loc.get("city"), loc.get("country")) if p)
+                for loc in j.get("locations") or []
+            ] or [", ".join(p for p in (j.get("city"), j.get("country")) if p)]
+            remote = j.get("telecommuting") in (True, "true", "True")
+            out.append(JobLead(
+                source="workable", external_id=str(j.get("shortcode")), url=j.get("url", ""),
+                title=j.get("title", ""), company=data.get("name") or company or slug,
+                location="; ".join(dict.fromkeys(p for p in places if p)),
+                remote=True if remote else _looks_remote(j.get("title", "")),
+                posted_at=_parse_dt(j.get("published_on") or j.get("created_at")),
+                description=html_to_text(j.get("description", "")),
+                tags=[t for t in (j.get("department"), j.get("function"), j.get("employment_type")) if t],
+            ))
+        return out
+
+    return _cached(f"workable:{slug.lower()}", 3600, fetch)
+
+
+def pinpoint(slug: str, company: str = "") -> List[JobLead]:
+    slug = _check_slug(slug)
+
+    def fetch() -> List[JobLead]:
+        data = _get_json(f"https://{slug}.pinpointhq.com/postings.json")
+        out = []
+        for j in data.get("data", []):
+            loc = j.get("location") or {}
+            workplace = str(j.get("workplace_type") or "").lower()
+            parts = [j.get("description") or ""] + [
+                f"{j.get(k + '_header') or ''}\n{j.get(k) or ''}"
+                for k in ("key_responsibilities", "skills_knowledge_expertise", "benefits") if j.get(k)
+            ]
+            out.append(JobLead(
+                source="pinpoint", external_id=str(j.get("id")), url=j.get("url", ""),
+                title=j.get("title", ""), company=company or slug,
+                location=", ".join(dict.fromkeys(p for p in (loc.get("city"), loc.get("name")) if p)),
+                remote=True if workplace == "remote" else None,
+                salary=_range(j.get("compensation_minimum"), j.get("compensation_maximum"),
+                              j.get("compensation_currency"), j.get("compensation_frequency"))
+                if j.get("compensation_visible") else "",
+                description="\n\n".join(html_to_text(p) for p in parts if p.strip()),
+                tags=[t for t in (((j.get("job") or {}).get("department") or {}).get("name"),
+                                  j.get("employment_type_text"), workplace) if t],
+            ))
+        return out
+
+    return _cached(f"pinpoint:{slug.lower()}", 3600, fetch)
+
+
+def softgarden(slug: str, company: str = "") -> List[JobLead]:
+    from tools.html_extract import jobposting_location, jobposting_name, jobposting_salary
+
+    slug = _check_slug(slug)
+
+    def fetch() -> List[JobLead]:
+        data = _get_json(f"https://{slug}.career.softgarden.de/jobs.feed.json")
+        out = []
+        for element in data.get("dataFeedElement", []):
+            node = element.get("item") or {}
+            loc = jobposting_location(node)
+            ident = node.get("identifier") or {}
+            out.append(JobLead(
+                source="softgarden", external_id=str(ident.get("value") or node.get("url", "")),
+                url=node.get("url", ""), title=node.get("title", ""),
+                company=jobposting_name(node.get("hiringOrganization")) or str(ident.get("name") or "")
+                or company or slug,
+                location=loc, remote=_looks_remote(loc),
+                posted_at=_parse_dt(node.get("datePosted")), salary=jobposting_salary(node),
+                description=html_to_text(node.get("description", "")),
+                tags=[str(node.get("employmentType") or "")] if node.get("employmentType") else [],
+            ))
+        return out
+
+    return _cached(f"softgarden:{slug.lower()}", 3600, fetch)
+
+
 BOARD_FETCHERS: Dict[str, Callable[..., List[JobLead]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
     "ashby": ashby,
     "smartrecruiters": smartrecruiters,
+    "personio": personio,
+    "teamtailor": teamtailor,
+    "recruitee": recruitee,
+    "workable": workable,
+    "pinpoint": pinpoint,
+    "softgarden": softgarden,
 }
 
 
@@ -324,16 +570,67 @@ def _slug_candidates(company: str) -> List[str]:
     return [c for c in dict.fromkeys(cands + [camel]) if c]
 
 
-def detect_board(company: str) -> Optional[Tuple[str, str, int]]:
-    """Find which public ATS board a company uses: (ats, slug, open_jobs)."""
-    for slug in _slug_candidates(company):
-        for ats in ("greenhouse", "lever", "ashby", "smartrecruiters"):
-            try:
-                jobs = BOARD_FETCHERS[ats](slug, company)
-            except SourceError:
-                continue
-            if jobs:
-                return ats, slug, len(jobs)
+def _probe(ats: str, slug: str, company: str) -> Optional[Tuple[str, str, int]]:
+    try:
+        jobs = BOARD_FETCHERS[ats](slug, company)
+    except SourceError:
+        return None
+    return (ats, slug, len(jobs)) if jobs else None
+
+
+def find_boards(company: str) -> List[Tuple[str, str, int]]:
+    """Every public ATS board answering to a company's likely slugs, probed in
+    parallel: [(ats, slug, open_jobs)], most jobs first.
+
+    A slug is not an identity: "iqm" on Lever is an unrelated New York
+    company, while IQM (quantum) is on Teamtailor. So callers must let the
+    user confirm a hit (show sample titles); ``detect_board_from_page`` on the
+    company's own careers page is the reliable route.
+    """
+    probes = [(ats, slug) for slug in _slug_candidates(company) for ats in BOARD_FETCHERS]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        hits = [h for h in pool.map(lambda p: _probe(p[0], p[1], company), probes) if h]
+    return sorted(dict.fromkeys(hits), key=lambda h: -h[2])
+
+
+# Where each ATS shows up in a careers page's HTML (links, iframes, scripts).
+_BOARD_PATTERNS: List[Tuple[str, re.Pattern]] = [
+    ("greenhouse", re.compile(r"(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_board(?:/js)?\?for=)?([A-Za-z0-9_-]+)")),
+    ("lever", re.compile(r"jobs\.(?:eu\.)?lever\.co/([A-Za-z0-9._-]+)")),
+    ("ashby", re.compile(r"jobs\.ashbyhq\.com/([A-Za-z0-9._-]+)")),
+    ("smartrecruiters", re.compile(r"(?:jobs|careers)\.smartrecruiters\.com/([A-Za-z0-9_-]+)")),
+    ("personio", re.compile(r"([a-z0-9-]+)\.jobs\.personio\.(?:de|com)")),
+    ("recruitee", re.compile(r"([a-z0-9-]+)\.recruitee\.com")),
+    ("workable", re.compile(r"apply\.workable\.com/(?!api\b|j/)([A-Za-z0-9_-]+)")),
+    ("pinpoint", re.compile(r"([a-z0-9-]+)\.pinpointhq\.com")),
+    ("softgarden", re.compile(r"([a-z0-9-]+)\.career\.softgarden\.de")),
+    ("teamtailor", re.compile(r"([a-z0-9-]+)\.teamtailor\.com")),
+]
+
+
+def detect_board_from_page(url: str, company: str = "") -> Optional[Tuple[str, str, int]]:
+    """Detect the ATS a careers page embeds, then confirm the board answers.
+    Teamtailor career sites on their own domain are recognised by the
+    platform's markers and probed at that host."""
+    from tools.url_ingest import fetch_html
+
+    try:
+        html = fetch_html(url)
+    except ValueError as exc:
+        raise SourceError(str(exc)) from exc
+    candidates: List[Tuple[str, str]] = []
+    for ats, pattern in _BOARD_PATTERNS:
+        for slug in dict.fromkeys(pattern.findall(html)):
+            if slug.lower() not in ("www", "api", "embed", "assets", "static", "cdn", "app", "careers"):
+                candidates.append((ats, slug))
+    if "teamtailor" in html.lower():
+        host = (urlparse(url).hostname or "").lower()
+        if host:
+            candidates.append(("teamtailor", host))
+    for ats, slug in dict.fromkeys(candidates):
+        hit = _probe(ats, slug, company or slug)
+        if hit:
+            return hit
     return None
 
 
@@ -502,6 +799,58 @@ def adzuna(country: str, what: str, where: str = "") -> List[JobLead]:
     return _cached(f"adzuna:{country}:{what.lower()}:{where.lower()}", 3600, fetch)
 
 
+# GermanTechJobs / SwissDevJobs / DevITjobs.uk: one RSS feed per country,
+# every item titled "Role @ Company [salary]".
+DEVJOBS_FEEDS: Dict[str, Tuple[str, str]] = {
+    "de": ("https://germantechjobs.de/rss", "Germany"),
+    "ch": ("https://swissdevjobs.ch/rss", "Switzerland"),
+    "gb": ("https://devitjobs.uk/rss", "United Kingdom"),
+}
+_DEVJOBS_TITLE = re.compile(r"^(?P<title>.*?)\s*-?\s*@\s*(?P<company>.*?)\s*(?:\[(?P<salary>[^\]]*)\])?\s*$")
+
+
+# A bare "remote" in a description is often "support users remote and on
+# site"; only an explicit statement makes the job itself remote.
+_FULLY_REMOTE = re.compile(
+    r"(?:100\s*%|fully|full|komplett|vollständig)[\s-]*remote|remote[\s-]*(?:first|only|job|position|role)"
+    r"|work from anywhere",
+    re.IGNORECASE,
+)
+
+
+def _devjobs_remote(title: str, body: str) -> Optional[bool]:
+    return True if re.search(r"\bremote\b", title, re.IGNORECASE) or _FULLY_REMOTE.search(body) else None
+
+
+def devjobs(country: str) -> List[JobLead]:
+    country = country.lower()
+    if country not in DEVJOBS_FEEDS:
+        raise SourceError(f"No DevJobs feed for {country!r}.")
+    url, country_name = DEVJOBS_FEEDS[country]
+
+    def fetch() -> List[JobLead]:
+        channel = _get_xml(url).find("channel")
+        out = []
+        for it in channel.findall("item") if channel is not None else []:
+            raw_title = _xml_text(it, "title")
+            m = _DEVJOBS_TITLE.match(raw_title)
+            body = html_to_text(_xml_text(it, "{http://purl.org/rss/1.0/modules/content/}encoded")
+                                or _xml_text(it, "description"))
+            out.append(JobLead(
+                source="devjobs", external_id=_xml_text(it, "guid") or _xml_text(it, "link"),
+                url=_xml_text(it, "link"),
+                title=(m.group("title") if m else raw_title).strip(),
+                company=(m.group("company") if m else "").strip(),
+                location=country_name, remote=_devjobs_remote(raw_title, body),
+                posted_at=_rss_date(_xml_text(it, "pubDate")),
+                salary=(m.group("salary") or "").strip() if m else "",
+                description=body,
+            ))
+        return out
+
+    return _cached(f"devjobs:{country}", 3600, fetch)
+
+
 # Aggregator sources the feed can enable, with the attribution their terms ask for.
 AGGREGATORS: Dict[str, dict] = {
     "arbeitnow": {"label": "Arbeitnow (EU)", "credit": "arbeitnow.com"},
@@ -509,4 +858,6 @@ AGGREGATORS: Dict[str, dict] = {
     "remoteok": {"label": "RemoteOK (remote)", "credit": "remoteok.com"},
     "hn": {"label": "HN Who is hiring", "credit": "news.ycombinator.com"},
     "adzuna": {"label": "Adzuna (UK/EU, needs key)", "credit": "adzuna.com"},
+    "devjobs": {"label": "GermanTechJobs / SwissDevJobs / DevITjobs (salary)",
+                "credit": "germantechjobs.de, swissdevjobs.ch, devitjobs.uk"},
 }
