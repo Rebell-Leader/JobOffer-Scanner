@@ -124,6 +124,22 @@ def fetch_job_posting(url: str) -> str:
     return text
 
 
+def fetch_html(url: str) -> str:
+    """A page's raw HTML through the same SSRF-checked, size-capped fetch
+    (used to detect which ATS a careers page embeds)."""
+    from utils.security import check_url_allowed
+
+    ok, reason = check_url_allowed(url)
+    if not ok:
+        raise ValueError(reason)
+    resp = _get_following_safe_redirects(url)
+    try:
+        body = _read_capped(resp)
+    finally:
+        resp.close()
+    return body.decode(resp.encoding or "utf-8", errors="replace")
+
+
 _MAX_REDIRECTS = 5
 
 

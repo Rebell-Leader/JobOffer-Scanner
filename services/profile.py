@@ -27,6 +27,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from db.models import CandidateProfile as ProfileRow
 from db.session import get_session
+from tools.job_sources import BOARD_FETCHERS
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
 from utils.text import strip_code_fence
@@ -35,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 WORK_MODES = ("remote", "hybrid", "onsite")
 COMPANY_STAGES = ("startup", "scale-up", "enterprise", "public sector", "non-profit")
-# Supported company-board providers for the watchlist (tools.job_sources).
-WATCHLIST_ATS = ("greenhouse", "lever", "ashby", "smartrecruiters")
+# Supported company-board providers for the watchlist.
+WATCHLIST_ATS = tuple(BOARD_FETCHERS)
 
 
 class ProfileError(ValueError):

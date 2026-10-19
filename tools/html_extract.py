@@ -74,13 +74,13 @@ def _is_job_posting(node: dict) -> bool:
     return "JobPosting" in kinds
 
 
-def _name(value: Any) -> str:
+def jobposting_name(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("name") or "")
     return str(value or "")
 
 
-def _location(node: dict) -> str:
+def jobposting_location(node: dict) -> str:
     places = node.get("jobLocation") or []
     places = places if isinstance(places, list) else [places]
     out = []
@@ -88,7 +88,7 @@ def _location(node: dict) -> str:
         addr = place.get("address") if isinstance(place, dict) else None
         if isinstance(addr, dict):
             parts = [
-                _name(addr.get(k))
+                jobposting_name(addr.get(k))
                 for k in ("addressLocality", "addressRegion", "addressCountry")
             ]
             out.append(", ".join(p for p in parts if p))
@@ -99,7 +99,7 @@ def _location(node: dict) -> str:
     return "; ".join(dict.fromkeys(p for p in out if p))
 
 
-def _salary(node: dict) -> str:
+def jobposting_salary(node: dict) -> str:
     base = node.get("baseSalary")
     if not isinstance(base, dict):
         return ""
@@ -132,10 +132,10 @@ def _job_posting_from_jsonld(soup: BeautifulSoup) -> Optional[str]:
                 employment = ", ".join(map(str, employment))
             header = [
                 ("Title", str(node.get("title") or "")),
-                ("Company", _name(node.get("hiringOrganization"))),
-                ("Location", _location(node)),
+                ("Company", jobposting_name(node.get("hiringOrganization"))),
+                ("Location", jobposting_location(node)),
                 ("Employment type", str(employment or "")),
-                ("Compensation", _salary(node)),
+                ("Compensation", jobposting_salary(node)),
                 ("Date posted", str(node.get("datePosted") or "")),
             ]
             lines = [f"{label}: {value}" for label, value in header if value]

@@ -153,47 +153,105 @@ def _render_watchlist(user_id: int) -> None:
             st.rerun()
 
     with st.form("watch_add_form", clear_on_submit=True):
+        careers_url = st.text_input(
+            "Careers page URL (most reliable)", placeholder="https://www.example.com/careers",
+            help="We read which job board the page embeds (Personio, Teamtailor, Greenhouse, "
+                 "Lever, Ashby, Workable, Recruitee, Pinpoint, Softgarden, SmartRecruiters).",
+        )
         c1, c2, c3 = st.columns([3, 2, 2])
-        company = c1.text_input("Company", placeholder="N26")
+        company = c1.text_input("Company", placeholder="IQM")
         ats = c2.selectbox("Board", ["auto-detect", *WATCHLIST_ATS])
-        slug = c3.text_input("Board slug (optional)", placeholder="n26",
-                             help="The part of the jobs URL after the ATS domain, "
-                                  "e.g. boards.greenhouse.io/**n26**.")
+        slug = c3.text_input("Board slug / host (optional)", placeholder="iqm",
+                             help="The company part of the jobs URL, e.g. **iqm**.teamtailor.com "
+                                  "or jobs.personio.de/**acme**. For Teamtailor on a custom "
+                                  "domain, the host (careers.acme.com).")
         if st.form_submit_button("➕ Add company"):
-            _add_to_watchlist(user_id, company.strip(), ats, slug.strip())
+            _add_to_watchlist(user_id, company.strip(), ats, slug.strip(), careers_url.strip())
+
+    _render_board_candidates(user_id)
 
 
-def _add_to_watchlist(user_id: int, company: str, ats: str, slug: str) -> None:
-    from tools.job_sources import BOARD_FETCHERS, SourceError, detect_board
+def _sample_titles(ats: str, slug: str, company: str) -> str:
+    from tools.job_sources import BOARD_FETCHERS, SourceError
 
-    if not company:
-        st.error("Enter a company name.")
-        return
-    if ats == "auto-detect" or not slug:
-        with st.spinner(f"Looking for {company}'s job board…"):
-            found = detect_board(slug or company) if ats == "auto-detect" else None
-        if found is None and ats != "auto-detect":
-            found = (ats, slug or company.lower().replace(" ", ""), 0)
-        if found is None:
-            st.warning(
-                f"Couldn't find a public Greenhouse / Lever / Ashby / SmartRecruiters board "
-                f"for {company}. If you know it, pick the board and enter the slug from "
-                "their jobs URL; otherwise use web discovery or paste postings."
-            )
-            return
-        ats, slug, count = found
-    else:
-        try:
-            count = len(BOARD_FETCHERS[ats](slug, company))
-        except SourceError as exc:
-            st.error(f"That board didn't respond: {exc}")
-            return
+    try:
+        leads = BOARD_FETCHERS[ats](slug, company)  # cached from the probe
+    except SourceError:
+        return ""
+    return "; ".join(f"{lead.title} ({lead.location})" if lead.location else lead.title
+                     for lead in leads[:3])
+
+
+def _save_watch(user_id: int, company: str, ats: str, slug: str, count: int) -> None:
     profile = get_profile(user_id)
-    profile.watchlist.append({"company": company, "ats": ats, "slug": slug})
+    profile.watchlist.append({"company": company or slug, "ats": ats, "slug": slug})
     try:
         save_profile(user_id, profile)
     except ProfileError as exc:
         st.error(str(exc))
         return
-    st.session_state["watch_msg"] = f"Watching {company} ({ats}: {slug}), {count} open roles right now."
+    st.session_state.pop("watch_candidates", None)
+    st.session_state["watch_msg"] = f"Watching {company or slug} ({ats}: {slug}), {count} open roles right now."
     st.rerun()
+
+
+def _add_to_watchlist(user_id: int, company: str, ats: str, slug: str, careers_url: str) -> None:
+    from tools.job_sources import BOARD_FETCHERS, SourceError, detect_board_from_page, find_boards
+
+    if ats != "auto-detect" and slug:
+        try:
+            count = len(BOARD_FETCHERS[ats](slug, company or slug))
+        except SourceError as exc:
+            st.error(f"That board didn't respond: {exc}")
+            return
+        _save_watch(user_id, company, ats, slug, count)
+        return
+    if careers_url:
+        with st.spinner("Reading the careers page…"):
+            try:
+                found = detect_board_from_page(careers_url, company)
+            except SourceError as exc:
+                st.error(f"Couldn't read that page: {exc}")
+                return
+        if found is None:
+            st.warning(
+                "No supported job board found on that page. The company may use Workday, "
+                "JOIN or a custom system; use web discovery or paste postings for it."
+            )
+            return
+        found_ats, found_slug, count = found
+        _save_watch(user_id, company or found_slug, found_ats, found_slug, count)
+        return
+    if not company:
+        st.error("Enter a careers page URL or a company name.")
+        return
+    with st.spinner(f"Looking for {company}'s job board…"):
+        hits = find_boards(company)
+    if not hits:
+        st.warning(
+            f"No public board answers to {company!r}. Paste their careers page URL instead; "
+            "that finds boards under any name."
+        )
+        return
+    st.session_state["watch_candidates"] = [
+        {"company": company, "ats": a, "slug": sl, "count": n, "samples": _sample_titles(a, sl, company)}
+        for a, sl, n in hits
+    ]
+
+
+def _render_board_candidates(user_id: int) -> None:
+    candidates = st.session_state.get("watch_candidates") or []
+    if not candidates:
+        return
+    st.info(
+        "These boards answer to that name. A name can belong to several companies, so pick "
+        "the one whose jobs look right (or paste the careers page URL instead)."
+    )
+    for i, c in enumerate(candidates):
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"**{c['ats']}** · `{c['slug']}` · {c['count']} jobs  \n{c['samples'][:200]}")
+        if c2.button("Add", key=f"watch_pick_{i}"):
+            _save_watch(user_id, c["company"], c["ats"], c["slug"], c["count"])
+    if st.button("None of these", key="watch_pick_none"):
+        st.session_state.pop("watch_candidates", None)
+        st.rerun()
