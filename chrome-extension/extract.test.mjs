@@ -8,6 +8,7 @@ const {
   normalizeWhitespace,
   buildAnalyzeRequest,
   renderVerdict,
+  describeApiError,
 } = require("./extract.js");
 
 let passed = 0;
@@ -93,6 +94,35 @@ test("renderVerdict maps light to emoji", () => {
 test("renderVerdict has a sane default for missing verdict", () => {
   const out = renderVerdict({});
   assert.ok(out.includes("Consider with Caution"));
+});
+
+// --- describeApiError ---
+test("describeApiError surfaces the quota detail on 402", () => {
+  const out = describeApiError(402, "Analysis budget exceeded for this window.");
+  assert.ok(out.includes("402"));
+  assert.ok(out.includes("Analysis budget exceeded"));
+});
+
+test("describeApiError has a fallback message on 402 with no detail", () => {
+  assert.ok(describeApiError(402, null).toLowerCase().includes("upgrade"));
+});
+
+test("describeApiError surfaces the rate-limit detail on 429", () => {
+  const out = describeApiError(429, "Retry in 30s.");
+  assert.ok(out.includes("429"));
+  assert.ok(out.includes("Retry in 30s"));
+});
+
+test("describeApiError flags 401 distinctly", () => {
+  assert.ok(describeApiError(401, null).includes("Token rejected"));
+});
+
+test("describeApiError has a generic message for 5xx", () => {
+  assert.ok(describeApiError(503, null).includes("Server error"));
+});
+
+test("describeApiError falls back to a bare status for unmapped codes", () => {
+  assert.ok(describeApiError(418, null).includes("418"));
 });
 
 console.log(`\n${passed} extract.js tests passed`);

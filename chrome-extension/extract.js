@@ -62,6 +62,32 @@ function renderVerdict(result) {
   return `${emoji} ${label}`;
 }
 
+// Turn a non-2xx /v1/analyze response into an actionable popup message.
+// `detail` is the FastAPI error body's `detail` field (or null/undefined
+// when the body wasn't JSON) — the REST API already maps quota/rate-limit
+// errors to 402/429 with a human-readable detail string, so surfacing it
+// beats a bare status code.
+function describeApiError(status, detail) {
+  const suffix = detail ? ` ${detail}` : "";
+  switch (status) {
+    case 401:
+      return "Token rejected (401). Check your API token.";
+    case 402:
+      return `Plan limit reached (402).${suffix || " Upgrade your plan to keep analyzing."}`;
+    case 403:
+      return `Access denied (403).${suffix}`;
+    case 404:
+      return `Not found (404).${suffix}`;
+    case 429:
+      return `Rate limited (429).${suffix || " Try again shortly."}`;
+    default:
+      if (status >= 500) {
+        return `Server error (${status}). Try again shortly.`;
+      }
+      return `API error ${status}.${suffix}`;
+  }
+}
+
 // Export for Node tests; harmless in the browser (module is undefined there,
 // guarded so the popup can load this file directly via <script>).
 if (typeof module !== "undefined" && module.exports) {
@@ -70,5 +96,6 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeWhitespace,
     buildAnalyzeRequest,
     renderVerdict,
+    describeApiError,
   };
 }

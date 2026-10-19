@@ -59,12 +59,17 @@ logger = logging.getLogger(__name__)
 # override the whole table with LLM_PRICING_JSON='{"model": [in, out], ...}'.
 _DEFAULT_PRICING: Dict[str, Tuple[float, float]] = {
     # Anthropic
+    "claude-haiku-5-5": (0.0001, 0.0005),
+    "claude-sonnet-5-5": (0.002, 0.01),
+    "claude-opus-5-5": (0.004, 0.02),
     "claude-haiku-4-5-20251001": (0.001, 0.005),
     "claude-sonnet-4-6": (0.003, 0.015),
     # OpenAI
     "gpt-4o-mini": (0.00015, 0.0006),
     "gpt-4o": (0.0025, 0.01),
     "gpt-5": (0.00125, 0.01),
+    "gpt-5-mini": (0.00025, 0.002),
+    "gpt-5-nano": (0.00005, 0.0004),
     # Featherless / open models are flat-rate hosted; treat as ~free per-token.
     "Qwen/Qwen3-32B": (0.0, 0.0),
     "deepseek-ai/DeepSeek-R1-0528": (0.0, 0.0),

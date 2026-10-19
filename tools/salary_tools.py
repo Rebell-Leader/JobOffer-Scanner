@@ -23,14 +23,17 @@ except ImportError:  # pragma: no cover - older langchain layout
 from tools.data_sources import fetch_cost_of_living, fetch_salary_benchmark
 from utils.cache import cache
 from utils.llm import get_completion
+from utils.security import sanitize_untrusted
 
 logger = logging.getLogger(__name__)
 
 
-def estimate_salary_range(job_title, location, experience_level, model="detailed"):
-    print(
-        f"Estimating salary for - Title: {job_title}, Location: {location}, "
-        f"Experience: {experience_level}"
+def estimate_salary_range(
+    job_title, location, experience_level, model="detailed", posted_compensation=None
+):
+    logger.info(
+        "Estimating salary for title=%s location=%s experience=%s",
+        job_title, location, experience_level,
     )
 
     real_benchmark = fetch_salary_benchmark(job_title, location)
@@ -45,7 +48,12 @@ def estimate_salary_range(job_title, location, experience_level, model="detailed
     sources_tag = (
         f"adz={'1' if real_benchmark else '0'}_col={'1' if real_col else '0'}"
     )
-    cache_key = f"salary_{job_title}_{location}_{experience_level}_{model}_{sources_tag}"
+    posted = sanitize_untrusted(str(posted_compensation or ""), max_chars=300)
+    if posted.lower() in ("", "none", "null", "not specified", "unknown"):
+        posted = ""
+    cache_key = (
+        f"salary_{job_title}_{location}_{experience_level}_{model}_{sources_tag}_{posted}"
+    )
     cached = cache.get(cache_key)
     if cached:
         return cached
@@ -60,15 +68,31 @@ def estimate_salary_range(job_title, location, experience_level, model="detailed
             "Primary salary figures are from live Adzuna postings. The heuristic "
             "below is a cross-check only — use Adzuna when they conflict."
         )
+        honesty_rule = (
+            "State up front which figures come from Adzuna postings and which "
+            "are estimates."
+        )
     else:
         salary_block = (
-            f"Heuristic salary estimate (internal model, NOT market data — "
-            f"label as ESTIMATE):\n{heuristic_salary}"
+            f"Crude internal multiplier table (NOT market data; a weak prior "
+            f"only):\n{heuristic_salary}"
         )
         primary_note = (
-            "No live salary feed configured (set ADZUNA_APP_ID + ADZUNA_APP_KEY). "
-            "Figures below are heuristic estimates only — label them as ESTIMATE."
+            "No live salary feed is configured. The multiplier table below is "
+            "crude and often low for high-cost markets — prefer your own knowledge "
+            "of typical market ranges for this role, seniority and location, and "
+            "label every figure as an ESTIMATE."
         )
+        honesty_rule = "State up front that all figures are estimates, not benchmarks."
+
+    posted_block = (
+        f"\nCompensation stated in the posting: {posted}\n"
+        "Compare it against your range: say whether it is below, within, or above "
+        "market, and by roughly how much.\n"
+        if posted else
+        "\nThe posting does not state compensation; note that as a negotiation "
+        "risk.\n"
+    )
 
     if real_col:
         col_block = (
@@ -88,7 +112,7 @@ Produce a markdown salary analysis for:
 - Experience Level: {experience_level or "not specified"}
 
 {primary_note}
-
+{posted_block}
 Salary signals:
 {salary_block}
 
@@ -96,7 +120,7 @@ Cost-of-living signals:
 {col_block}
 
 In your report:
-1. State up front that figures are heuristic estimates, not benchmarks.
+1. {honesty_rule}
 2. Give a salary range in USD and, where it makes sense, local currency.
 3. Explain the main factors driving the range (role, location, seniority).
 4. Provide a cost-of-living adjusted assessment.
@@ -240,9 +264,11 @@ _PERCENTILE_MULTS = {"low": 0.8, "median": 1.0, "high": 1.2}
 def _simulated_salary(job_title, location, years, percentile):
     base = 70000
     if job_title:
-        for title, salary in _BASE_SALARIES.items():
-            if title in job_title.lower():
-                base = salary
+        # Most specific title first, on word boundaries ("ai" must not match
+        # "trainer", and "software engineer" must win over "engineer").
+        for title in sorted(_BASE_SALARIES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(title)}\b", job_title.lower()):
+                base = _BASE_SALARIES[title]
                 break
 
     loc_mult = 1.0

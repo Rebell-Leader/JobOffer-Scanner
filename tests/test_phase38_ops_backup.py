@@ -104,6 +104,49 @@ class RunbookTests(unittest.TestCase):
         for needle in ("backup", "restore drill", "migration", "escalation"):
             self.assertIn(needle, text)
 
+    def test_runbook_documents_the_compose_scheduler(self):
+        text = _RUNBOOK.read_text().lower()
+        self.assertIn("worker.scheduler", text)
+
+
+class SchedulerWiringTests(unittest.TestCase):
+    """P2 follow-up: reminders + backups are real but nothing invoked them in
+    the shipped Docker Compose stack. worker/scheduler.py + the compose
+    `scheduler` service close that gap — assert both exist and are wired."""
+
+    def test_compose_defines_scheduler_service(self):
+        compose = (_ROOT / "docker-compose.yml").read_text()
+        self.assertIn("scheduler:", compose)
+        self.assertIn("worker.scheduler", compose)
+
+    def test_scheduler_module_calls_reminders_and_backup(self):
+        from unittest import mock
+
+        from worker import scheduler
+
+        with mock.patch.object(scheduler, "send_inactivity_reminders",
+                                return_value=3) as reminders, \
+             mock.patch.object(scheduler.subprocess, "run") as run:
+            scheduler._run_reminders()
+            scheduler._run_backup()
+
+        reminders.assert_called_once_with()
+        run.assert_called_once()
+        self.assertIn(str(scheduler._BACKUP_SCRIPT), run.call_args.args[0])
+
+    def test_scheduler_survives_a_failing_run(self):
+        from unittest import mock
+
+        from worker import scheduler
+
+        with mock.patch.object(scheduler, "send_inactivity_reminders",
+                                side_effect=RuntimeError("boom")):
+            scheduler._run_reminders()  # must not raise
+
+        with mock.patch.object(scheduler.subprocess, "run",
+                                side_effect=RuntimeError("boom")):
+            scheduler._run_backup()  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

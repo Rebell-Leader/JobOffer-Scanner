@@ -213,6 +213,12 @@ same canned "TechCorp" text regardless of input) to the current product:
 
 ## Production-readiness roadmap (what's left)
 
+> **Superseded in part by `docs/ASSESSMENT.md` (2026-10-19)**: the current
+> verified state, remaining paid-launch blockers, and P1 backlog. Some items
+> marked ✅ below were not actually true at that point (e.g. 5
+> `use_container_width` sites remain). Local single-user launch:
+> `./scripts/run_local.sh` (nothing in the app loads `.env` by itself).
+
 The app is feature-complete and deployed, but several things stand between it
 and "production-grade for real multi-user traffic." Prioritized:
 

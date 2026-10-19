@@ -53,6 +53,15 @@ class PDFExportTests(unittest.TestCase):
         out = markdown_to_pdf(sample)
         self.assertTrue(bytes(out[:5]) == b"%PDF-")
 
+    def test_handles_out_of_latin1_characters(self):
+        """CJK/Cyrillic/uncommon-emoji text (real for LLM-generated CV
+        content) must render, not crash with an unmapped-glyph exception."""
+        from services.pdf_export import markdown_to_pdf
+
+        sample = "# 简历\nОпыт работы: Senior Engineer 🚀\n"
+        out = markdown_to_pdf(sample)
+        self.assertTrue(bytes(out[:5]) == b"%PDF-")
+
     def test_empty_input_renders_blank_pdf(self):
         from services.pdf_export import markdown_to_pdf
 
@@ -105,3 +114,22 @@ class PDFExportMissingDepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnicodeFontTests(unittest.TestCase):
+    """With the bundled TTF, non-Latin-1 names survive instead of becoming '?'."""
+
+    def test_polish_and_cyrillic_text_is_preserved(self):
+        import io
+
+        from pypdf import PdfReader
+
+        from services.pdf_export import _font_dir, markdown_to_pdf
+
+        if _font_dir() is None:
+            self.skipTest("bundled font not present")
+        pdf = markdown_to_pdf("# Łukasz Żółć\n- Опыт: saved €2M → 40% faster", "cv")
+        text = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
+        self.assertIn("Łukasz Żółć", text)
+        self.assertIn("Опыт", text)
+        self.assertIn("€2M →", text)

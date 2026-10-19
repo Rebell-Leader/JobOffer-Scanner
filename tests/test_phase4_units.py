@@ -256,7 +256,8 @@ class TelegramHandlerTests(unittest.TestCase):
             "job_details": {"extracted_details": {"company_name": "Acme"}},
             "final_report": "# Report\n\nShort.",
         }
-        with mock.patch.object(handlers, "run_analysis", return_value=fake_result):
+        with mock.patch.object(handlers, "run_analysis_sync", return_value=fake_result), \
+             mock.patch.dict(os.environ, {"TELEGRAM_ALLOW_UNLINKED_ANALYZE": "1"}):
             _run(handlers.handle_analyze(cap, "Company: Acme\nTitle: Eng"))
         joined = "\n".join(cap.messages)
         self.assertIn("Analyzing", joined)

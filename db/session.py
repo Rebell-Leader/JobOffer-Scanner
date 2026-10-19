@@ -52,6 +52,9 @@ _initialized = False
 def _resolve_database_url() -> str:
     url = os.getenv("DATABASE_URL")
     if url:
+        # Heroku/Replit-style "postgres://" is rejected by SQLAlchemy 2.
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://"):]
         return url
     _DEFAULT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{_DEFAULT_SQLITE_PATH.as_posix()}"
@@ -64,7 +67,10 @@ def get_engine() -> Engine:
         # SQLite needs ``check_same_thread=False`` so Streamlit's thread pool
         # can share the connection.
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        _engine = create_engine(url, connect_args=connect_args, future=True)
+        # Managed Postgres (Replit/Neon) closes idle connections; ping before
+        # reuse and recycle so the first request after a quiet spell doesn't fail.
+        pool_args = {} if url.startswith("sqlite") else {"pool_pre_ping": True, "pool_recycle": 300}
+        _engine = create_engine(url, connect_args=connect_args, future=True, **pool_args)
         _enable_sqlite_fk(_engine)
         logger.info("DB engine created for %s", url.split("://", 1)[0])
     return _engine

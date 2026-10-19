@@ -22,6 +22,7 @@ from services._ownership import require_owned
 from tools.resume_tools import extract_resume_text  # PDF/DOCX/TXT parser
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
+from utils.text import strip_code_fence
 
 
 class MasterCVError(ValueError):
@@ -269,14 +270,12 @@ def parse_master_cv(user_id: int, model: str = "detailed") -> dict:
         raise MasterCVError("No master CV saved yet.")
 
     prompt = _PARSE_PROMPT.format(cv_wrapped=wrap_untrusted(cv.raw_text, "master_cv"))
-    response = get_completion(prompt, model)
+    from services.analysis_runner import metered_llm
+
+    with metered_llm(user_id, model) as tier:
+        response = get_completion(prompt, tier)
     # The model occasionally wraps JSON in a markdown fence even when told not to.
-    text = response.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip().rstrip("`").strip()
+    text = strip_code_fence(response)
 
     try:
         structured = json.loads(text)

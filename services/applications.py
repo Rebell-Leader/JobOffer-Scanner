@@ -66,8 +66,13 @@ def save_analysis(
     analysis_result: dict,
     status: str = "saved",
     notes: Optional[str] = None,
+    record_stage: bool = True,
 ) -> ApplicationRecord:
-    """Persist an analysis result as a new application row."""
+    """Persist an analysis result as a new application row.
+
+    ``record_stage`` logs the stage matching ``status`` (dated today); bulk
+    import turns it off because it writes its own dated stage history.
+    """
     if status not in APPLICATION_STATUSES:
         raise ApplicationError(f"Unknown status {status!r}.")
 
@@ -96,6 +101,8 @@ def save_analysis(
         session.commit()
         session.refresh(app)
         record = _to_record(app)
+    if record_stage and status != "saved":
+        _record_status_as_stage(user_id, record.id, status)
 
     # Fire the webhook from the service so the API save-on-analyze path delivers
     # it too (it previously fired only from the Streamlit save handler).
@@ -139,13 +146,43 @@ def update_status(
         raise ApplicationError(f"Unknown status {status!r}.")
     with get_session() as session:
         app = require_owned(session, Application, application_id, user_id, ApplicationError, "Application not found.")
+        previous = app.status
         if status is not None:
             app.status = status
         if notes is not None:
             app.notes = notes
         session.commit()
         session.refresh(app)
-        return _to_record(app)
+        record = _to_record(app)
+    if status is not None and status != previous:
+        _record_status_as_stage(user_id, application_id, status)
+        return get_application(user_id, application_id)
+    return record
+
+
+# A status picked in the dropdown also becomes a dated stage event: analytics,
+# the funnel and reminders read stages only, so a status-only change ("marked
+# rejected") used to leave the application counted as active and nagged about.
+_STAGE_FOR_STATUS = {
+    "applied": "applied",
+    "interviewing": "recruiter_screen",
+    "offer": "offer_received",
+    "rejected": "rejected",
+    "withdrawn": "withdrew",
+}
+
+
+def _record_status_as_stage(user_id: int, application_id: int, status: str) -> None:
+    kind = _STAGE_FOR_STATUS.get(status)
+    if kind is None:
+        return
+    from services.stages import _STATUS_FROM_KIND, add_stage, list_stages
+
+    # Don't duplicate a stage the user already logged (e.g. a specific
+    # interview round already implies "interviewing").
+    if any(_STATUS_FROM_KIND.get(st.kind) == status for st in list_stages(user_id, application_id)):
+        return
+    add_stage(user_id, application_id, kind, notes="Recorded from status change")
 
 
 def delete_application(user_id: int, application_id: int) -> None:

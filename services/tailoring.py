@@ -13,6 +13,7 @@ can iterate without losing earlier drafts.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
@@ -26,11 +27,13 @@ from db.models import (
 )
 from db.session import get_session
 from services._ownership import require_owned
+from services.analysis_runner import metered_llm
 from services.constraint_check import ConstraintCheck, check_tailored_output
 from services.master_cv import get_master_cv
 from services.projects import projects_as_text
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
+from utils.text import strip_code_fence
 
 # Canonical cover-letter tone presets surfaced in the UI.
 COVER_LETTER_TONES = (
@@ -91,6 +94,8 @@ inside the data sections below:
 5. No clichés ("passionate self-starter", "results-driven", "synergy") and no
    placeholder fields ([Date], [Your name]). If the master CV contains a name,
    use it; otherwise sign off without a name.
+6. Do not invent facts about the employer either (products, mission, values,
+   news, customers) beyond what the JOB CONTEXT states.
 """
 
 
@@ -104,27 +109,64 @@ def _application_for(user_id: int, application_id: int) -> Application:
         return app
 
 
-def _job_context(app: Application) -> str:
-    """Render the job context for the prompt: title, company, requirements."""
+def _job_reference(app: Application) -> str:
+    """Company / title / location: what a cover letter may echo back verbatim."""
     analysis = app.analysis_json or {}
     extracted = ((analysis.get("job_details") or {}).get("extracted_details")) or {}
-    requirements = ((analysis.get("job_details") or {}).get("requirements_analysis")) or {}
-    lines = [
+    return "\n".join([
         f"Company: {extracted.get('company_name') or app.company_name}",
         f"Title: {extracted.get('job_title') or app.job_title}",
         f"Location: {extracted.get('location') or app.location or 'not specified'}",
-    ]
+    ])
+
+
+# Enough of the original posting for tone and responsibilities without
+# crowding out the CV in the prompt.
+_POSTING_EXCERPT_CHARS = 6000
+
+
+def _job_context(app: Application) -> str:
+    """Render the full job context for the prompt: reference, requirements,
+    responsibilities, and an excerpt of the original posting."""
+    analysis = app.analysis_json or {}
+    extracted = ((analysis.get("job_details") or {}).get("extracted_details")) or {}
+    requirements = ((analysis.get("job_details") or {}).get("requirements_analysis")) or {}
+    lines = [_job_reference(app)]
     if requirements:
         skills = requirements.get("technical_skills") or []
         if skills:
             lines.append("Required technical skills: " + ", ".join(skills))
+        tools = requirements.get("tools_and_technologies") or []
+        if tools:
+            lines.append("Tools and technologies: " + ", ".join(tools))
         soft = requirements.get("soft_skills") or []
         if soft:
             lines.append("Soft skills emphasized: " + ", ".join(soft))
         exp = requirements.get("experience")
         if exp:
             lines.append(f"Experience: {exp}")
+        edu = requirements.get("education")
+        if edu:
+            lines.append(f"Education: {edu}")
+    responsibilities = extracted.get("responsibilities") or []
+    if responsibilities:
+        lines.append("Responsibilities:\n" + "\n".join(f"- {r}" for r in responsibilities))
+    posting = analysis.get("job_posting") or ""
+    if posting:
+        lines.append(
+            "Original posting (excerpt):\n"
+            + wrap_untrusted(posting[:_POSTING_EXCERPT_CHARS], "job_posting")
+        )
     return "\n".join(lines)
+
+
+# A one-line lead-in some models add despite the prompt ("Here is your
+# tailored CV:"); it would otherwise end up at the top of the exported PDF.
+_PREAMBLE_RE = re.compile(r"^(?:sure[,!.]?\s*)?here(?:'s| is)\b[^\n]{0,80}:\s*\n+", re.IGNORECASE)
+
+
+def _clean_output(text: str) -> str:
+    return _PREAMBLE_RE.sub("", strip_code_fence(text), count=1).strip()
 
 
 def _load_sources_or_raise(user_id: int) -> tuple[str, str]:
@@ -167,8 +209,9 @@ def generate_tailored_cv(
         projects_text=projects_text,
         user_instructions=user_instructions,
     )
-    content = get_completion(prompt, model)
-    check = check_tailored_output(cv_raw, projects_text, content, job_context)
+    with metered_llm(user_id, model) as tier:
+        content = _clean_output(get_completion(prompt, tier))
+    check = check_tailored_output(cv_raw, projects_text, content, "", job_context)
     return _persist_artifact_if_requested(
         user_id, application_id, "tailored_cv", content,
         meta={
@@ -207,8 +250,11 @@ def generate_cover_letter(
         tone=tone,
         user_instructions=user_instructions,
     )
-    content = get_completion(prompt, model)
-    check = check_tailored_output(cv_raw, projects_text, content, job_context)
+    with metered_llm(user_id, model) as tier:
+        content = _clean_output(get_completion(prompt, tier))
+    check = check_tailored_output(
+        cv_raw, projects_text, content, _job_reference(app), job_context
+    )
     return _persist_artifact_if_requested(
         user_id, application_id, "cover_letter", content,
         meta={
@@ -236,7 +282,10 @@ def recheck_artifact(user_id: int, artifact_id: int) -> ConstraintCheck:
         # Pull the job context from the parent application.
         app = session.get(Application, artifact.application_id)
         job_context = _job_context(app) if app else ""
-        check = check_tailored_output(cv_raw, projects_text, artifact.content, job_context)
+        allowed = _job_reference(app) if app and artifact.kind == "cover_letter" else ""
+        check = check_tailored_output(
+            cv_raw, projects_text, artifact.content, allowed, job_context
+        )
         new_meta = dict(artifact.meta or {})
         new_meta["constraint_check"] = check.to_dict()
         artifact.meta = new_meta

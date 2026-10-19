@@ -27,12 +27,12 @@ def generate(state: Dict) -> Dict:
 
     job_details_str = "\n".join(
         [
-            f"- **Company:** {extracted.get('company_name', 'Not specified')}",
-            f"- **Position:** {extracted.get('job_title', 'Not specified')}",
-            f"- **Location:** {extracted.get('location', 'Not specified')}",
-            f"- **Experience Required:** {extracted.get('experience_level', 'Not specified')}",
-            f"- **Job Type:** {extracted.get('job_type', 'Not specified')}",
-            f"- **Compensation:** {extracted.get('compensation', 'Not specified')}",
+            f"- **Company:** {extracted.get('company_name') or 'Not specified'}",
+            f"- **Position:** {extracted.get('job_title') or 'Not specified'}",
+            f"- **Location:** {extracted.get('location') or 'Not specified'}",
+            f"- **Experience Required:** {extracted.get('experience_level') or 'Not specified'}",
+            f"- **Job Type:** {extracted.get('job_type') or 'Not specified'}",
+            f"- **Compensation:** {extracted.get('compensation') or 'Not specified'}",
         ]
     )
 

@@ -10,8 +10,9 @@ Callers don't need to know whether a Celery broker is configured:
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from services.rate_limit import ANALYSIS_LIMITER, RateLimitExceeded
 
@@ -39,6 +40,30 @@ def check_user_quota(user_id: Optional[int]) -> None:
     from services.billing import check_and_record_analysis
 
     check_and_record_analysis(user_id)
+
+
+@contextlib.contextmanager
+def metered_llm(user_id: Optional[int], model: str = "detailed") -> Iterator[str]:
+    """Gate and attribute an auxiliary LLM feature (CV parsing, bulk import,
+    tailoring). Yields the model tier to use.
+
+    Analyses go through :func:`check_user_quota`; these features used to call
+    the LLM with no budget check at all, on the detailed model, with spend
+    ledgered to no user — an unlimited free-tier cost hole. This applies the
+    operator spend budget, the plan's LLM allowance and model clamp, and opens
+    the usage-attribution scope. ``None`` (no user) only attributes nothing.
+    """
+    from services.usage import account
+
+    if user_id is not None:
+        from services.billing import check_llm_allowance, clamp_model
+        from services.usage import check_budget
+
+        check_budget(user_id)
+        check_llm_allowance(user_id)
+        model = clamp_model(user_id, model)
+    with account(user_id):
+        yield model
 
 
 def async_enabled() -> bool:

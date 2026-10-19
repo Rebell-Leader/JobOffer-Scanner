@@ -197,15 +197,7 @@ def check_and_record_analysis(user_id: int) -> None:
                 tier=limits.name, limit_kind="analyses",
             )
 
-    if limits.budget_usd > 0:
-        from services.usage import spend_usd
-        spent = spend_usd(user_id, window_seconds=_window_days() * 86400)
-        if spent >= limits.budget_usd:
-            raise TierLimitExceeded(
-                f"The {limits.label} plan's usage allowance is exhausted for "
-                f"this {_window_days()}-day period. Upgrade for more capacity.",
-                tier=limits.name, limit_kind="budget",
-            )
+    check_llm_allowance(user_id, limits)
 
     # Metering is a side-effect: per the codebase convention it must never
     # break the analysis it meters. A failed insert fails OPEN (the user gets
@@ -216,6 +208,22 @@ def check_and_record_analysis(user_id: int) -> None:
             session.commit()
     except Exception as exc:  # noqa: BLE001 - log-and-continue
         logger.warning("Failed to meter analysis for user %s: %s", user_id, exc)
+
+
+def check_llm_allowance(user_id: int, limits: Optional[TierLimits] = None) -> None:
+    """Raise :class:`TierLimitExceeded` once the plan's LLM spend allowance for
+    the window is used up. Shared by analyses and every other LLM feature."""
+    limits = limits or get_limits(user_id)
+    if limits.budget_usd <= 0:
+        return
+    from services.usage import spend_usd
+    spent = spend_usd(user_id, window_seconds=_window_days() * 86400)
+    if spent >= limits.budget_usd:
+        raise TierLimitExceeded(
+            f"The {limits.label} plan's usage allowance is exhausted for "
+            f"this {_window_days()}-day period. Upgrade for more capacity.",
+            tier=limits.name, limit_kind="budget",
+        )
 
 
 def check_artifact_quota(user_id: int) -> None:
@@ -300,7 +308,7 @@ def create_checkout_session(user_id: int, tier: str, user_email: str = "") -> st
     if tier not in ("pro", "power"):
         raise BillingError(f"Unknown paid tier {tier!r}.")
     stripe = _get_stripe()
-    base = os.getenv("APP_BASE_URL", "http://localhost:5000").rstrip("/")
+    base = (env_str("APP_BASE_URL") or "http://localhost:5000").rstrip("/")
     session = stripe.checkout.Session.create(
         mode="subscription",
         line_items=[{"price": _price_for_tier(tier), "quantity": 1}],
@@ -324,7 +332,7 @@ def create_portal_session(user_id: int) -> str:
         customer_id = sub.stripe_customer_id if sub else None
     if not customer_id:
         raise BillingError("No active subscription to manage.")
-    base = os.getenv("APP_BASE_URL", "http://localhost:5000").rstrip("/")
+    base = (env_str("APP_BASE_URL") or "http://localhost:5000").rstrip("/")
     portal = stripe.billing_portal.Session.create(
         customer=customer_id, return_url=f"{base}/",
     )
@@ -342,9 +350,12 @@ def verify_webhook(payload: bytes, signature: str):
     if not secret:
         raise BillingError("STRIPE_WEBHOOK_SECRET is not configured.")
     try:
-        return stripe.Webhook.construct_event(payload, signature, secret)
+        event = stripe.Webhook.construct_event(payload, signature, secret)
     except Exception as exc:  # noqa: BLE001 - bad signature/body => reject
         raise BillingError(f"Webhook verification failed: {exc}") from exc
+    # Current stripe-python returns a StripeObject without dict ``.get``;
+    # handle_webhook_event works on plain dicts (so do its tests).
+    return event.to_dict() if hasattr(event, "to_dict") else event
 
 
 def _upsert_subscription(

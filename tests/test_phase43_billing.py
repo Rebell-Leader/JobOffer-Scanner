@@ -317,3 +317,40 @@ class TailoringQuotaIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StripeWebhookRealSdkTests(unittest.TestCase):
+    """Goes through the real stripe.Webhook.construct_event (the dict-based
+    tests above can't catch an SDK object that lacks ``.get``)."""
+
+    def setUp(self):
+        self.user = _fresh()
+
+    def test_signed_checkout_event_upgrades_user(self):
+        try:
+            import stripe  # noqa: F401
+        except ImportError:
+            self.skipTest("stripe not installed")
+        import hashlib
+        import hmac
+        import json
+        import time
+
+        from services import billing
+
+        secret = "whsec_test_secret"
+        payload = json.dumps({
+            "id": "evt_1", "object": "event", "type": "checkout.session.completed",
+            "data": {"object": {
+                "object": "checkout.session",
+                "metadata": {"user_id": str(self.user.id), "tier": "pro"},
+                "customer": "cus_1", "subscription": "sub_1",
+            }},
+        }).encode()
+        ts = int(time.time())
+        sig = hmac.new(secret.encode(), f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()
+        env = dict(_BILLING_ENV, STRIPE_WEBHOOK_SECRET=secret)
+        with mock.patch.dict(os.environ, env):
+            event = billing.verify_webhook(payload, f"t={ts},v1={sig}")
+            self.assertTrue(billing.handle_webhook_event(event))
+            self.assertEqual(billing.get_tier(self.user.id), "pro")

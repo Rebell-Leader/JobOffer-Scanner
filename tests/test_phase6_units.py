@@ -129,7 +129,10 @@ class UrlIngestFallbackTests(unittest.TestCase):
             status_code = 200
             headers = {"content-type": "text/html"}
             content = b"<html><body>tiny</body></html>"
+            is_redirect = False
             def raise_for_status(self): pass
+            def iter_content(self, chunk_size=1): yield self.content
+            def close(self): pass
 
         with mock.patch.object(url_ingest.requests, "get", return_value=_Resp()), \
              mock.patch.object(url_ingest, "_try_browser_fallback", return_value="X" * 500) as fb:
@@ -144,7 +147,10 @@ class UrlIngestFallbackTests(unittest.TestCase):
             status_code = 200
             headers = {"content-type": "text/html"}
             content = b"<html><body>tiny</body></html>"
+            is_redirect = False
             def raise_for_status(self): pass
+            def iter_content(self, chunk_size=1): yield self.content
+            def close(self): pass
 
         with mock.patch.object(url_ingest.requests, "get", return_value=_Resp()), \
              mock.patch.object(url_ingest, "_try_browser_fallback", return_value=None):

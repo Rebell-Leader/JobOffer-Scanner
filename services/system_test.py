@@ -11,6 +11,7 @@ All other probes are connection-level only (no writes, no side-effects).
 from __future__ import annotations
 
 import os
+import re
 import smtplib
 import time
 from dataclasses import dataclass
@@ -152,7 +153,26 @@ def run_system_test() -> List[TestResult]:
     results.append(_probe_telegram())
     results.append(_probe_url_ingest())
 
+    for r in results:
+        r.message = _redact(r.message)
     return results
+
+
+# Probe errors echo request URLs / DSNs (the Telegram API URL embeds the bot
+# token), so scrub every configured secret before anything is displayed.
+_SECRET_ENV_VARS = (
+    "TELEGRAM_BOT_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "FEATHERLESS_API_KEY",
+    "SMTP_PASSWORD", "STRIPE_SECRET_KEY", "DATABASE_URL", "NEWS_API_KEY",
+    "ADZUNA_APP_KEY", "BROWSERBASE_API_KEY",
+)
+
+
+def _redact(message: str) -> str:
+    for var in _SECRET_ENV_VARS:
+        value = os.getenv(var, "")
+        if len(value) >= 6:
+            message = message.replace(value, f"<{var}>")
+    return re.sub(r"(://[^:/@\s]+:)[^@\s]+@", r"\1***@", message)  # user:pass@ in URLs
 
 
 # ---------------------------------------------------------------------------

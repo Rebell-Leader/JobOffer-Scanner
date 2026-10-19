@@ -48,20 +48,41 @@ _TOKEN_RE = re.compile(
 _YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 _PCT_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?%)")
 
-# Money / quantity claims: "$10M", "10M users", "1.5B revenue", "5x growth".
+# Money / quantity claims: "$10M", "10M users", "1.5B revenue", "5x growth",
+# "team of 8", "7+ years". The money branch is anchored with a lookbehind:
+# a leading ``\b`` can never fire between a space and "$", which used to let
+# every dollar figure through unflagged.
+_QUANT_UNITS = (
+    r"users|customers|clients|requests|MAU|DAU|revenue|ARR|stars|downloads|installs"
+    r"|companies|years?|yrs?|engineers?|developers?|people|members?|reports?|countries"
+    r"|markets|teams?|interns?|services|microservices|projects|languages|patents?"
+)
 _QUANT_RE = re.compile(
-    r"\b(\$\s?\d[\d,.]*\s?[KMB]?(?:\s+(?:users|customers|requests|MAU|DAU|revenue|ARR))?"
-    r"|\d[\d,.]*\s?[KMB]\s+(?:users|customers|requests|MAU|DAU|revenue|ARR|stars|downloads|installs|companies)"
-    r"|\d+x\s+(?:growth|faster|increase|reduction|improvement))\b",
+    r"(?<![\w$])\$\s?\d[\d,.]*\s?(?:[KMB]\b|(?:thousand|million|billion)\b)?"
+    rf"(?:\s+(?:{_QUANT_UNITS})\b)?"
+    rf"|\b\d[\d,.]*\+?\s?(?:[KMB]\+?\s+)?(?:{_QUANT_UNITS})\b"
+    r"|\b(?:team|group|org|organization|staff) of \d+\b"
+    r"|\b\d+(?:\.\d+)?x\s+(?:growth|faster|increase|reduction|improvement)\b",
     re.IGNORECASE,
 )
+
+# Seniority / title words. They are claims about the candidate, so they must
+# trace to the master CV — previously they were ignored outright, which let
+# "Software Engineer" be rewritten as "Principal Engineer" without a flag.
+_SENIORITY_WORDS: Set[str] = {
+    "senior", "sr", "junior", "jr", "lead", "staff", "principal", "manager",
+    "director", "head", "chief", "vp", "intern",
+}
+# Salutation boilerplate that would otherwise surface "Manager" as a claim.
+_SALUTATION_RE = re.compile(r"(?i)\bhiring\s+(?:manager|team)s?\b")
+# A word broken across a line by PDF text extraction ("Kuber-\nnetes").
+_HYPHEN_BREAK_RE = re.compile(r"(\w)-\n(\w)")
 
 # Tokens we never treat as "facts" — section headers, generic role/job words,
 # common English, and a handful of words our resume tools generate themselves.
 COMMON_WORDS: Set[str] = {
     "summary", "skills", "experience", "education", "projects", "certifications",
-    "candidate", "engineer", "engineers", "senior", "junior", "lead", "manager",
-    "director", "principal", "staff", "intern",
+    "candidate", "engineer", "engineers",
     "company", "team", "role", "title", "year", "years", "month", "months",
     "include", "including", "such", "like", "example",
     "data", "system", "systems", "service", "services", "platform",
@@ -117,21 +138,60 @@ def _normalize(token: str) -> str:
     return re.sub(r"\s+", " ", cleaned).casefold()
 
 
-def extract_proper_nouns(text: str) -> Set[str]:
-    """Return the case-folded set of skill/proper-noun-shaped tokens in ``text``."""
+def _prepare(text: str) -> str:
+    text = _HYPHEN_BREAK_RE.sub(r"\1\2", text)
+    return _SALUTATION_RE.sub(" ", text)
+
+
+def _is_sentence_initial(text: str, start: int) -> bool:
+    """True when the token at ``start`` opens a sentence, line, or bullet."""
+    before = text[max(0, start - 40):start].rstrip(" \t*-•>#_|")
+    before = re.sub(r"\d+[.)]$", "", before).rstrip()
+    return not before or before[-1] in ".!?\n"
+
+
+def _is_plain_word(token: str) -> bool:
+    """A capitalized dictionary-looking word ("Thank", "Having") rather than a
+    skill shape ("PyTorch", "AWS", "C++", "Node.js")."""
+    return token[:1].isupper() and token[1:].islower() and token.isalpha()
+
+
+def extract_proper_nouns(text: str, prose_filter: bool = False) -> Set[str]:
+    """Return the case-folded set of skill/proper-noun-shaped tokens in ``text``.
+
+    ``prose_filter`` skips capitalized plain words that merely open a sentence
+    or bullet. Use it on generated output only: on the source side every token
+    should count as an allowed fact.
+    """
     out: Set[str] = set()
     if not text:
         return out
-    for m in _TOKEN_RE.findall(text):
-        norm = _normalize(m)
-        if norm in COMMON_WORDS or len(norm) < 2:
+    text = _prepare(text)
+    for m in _TOKEN_RE.finditer(text):
+        token = m.group(1)
+        norm = _normalize(token)
+        # A capitalized plain word that merely opens a sentence or bullet
+        # ("Thank you", "Led the migration") is ordinary prose. Seniority words
+        # and known skills are still checked there — role headers start lines.
+        if (
+            prose_filter
+            and _is_plain_word(token.rstrip(".,;:!?"))
+            and norm not in _SENIORITY_WORDS
+            and norm not in _SKILL_LEXICON
+            and _is_sentence_initial(text, m.start())
+        ):
             continue
-        out.add(norm)
-        # Also index each word of a multi-word phrase so "Distributed Systems"
-        # in the master CV doesn't make a bare "Distributed" in tailored seem new.
-        for part in norm.split():
-            if part not in COMMON_WORDS and len(part) >= 2:
-                out.add(part)
+        # "Python/Django" is two skills, not one new term.
+        parts = norm.split("/") if "/" in norm and "://" not in norm else [norm]
+        for piece in parts:
+            if piece in COMMON_WORDS or len(piece) < 2:
+                continue
+            out.add(piece)
+            # Also index each word of a multi-word phrase so "Distributed Systems"
+            # in the master CV doesn't make a bare "Distributed" in tailored seem new.
+            for part in piece.split():
+                if part not in COMMON_WORDS and len(part) >= 2:
+                    out.add(part)
     # Catch known skills written in lowercase (the capitalization gate above
     # misses them). Word-boundaried so "java" doesn't match "javascript" etc.
     low = text.casefold()
@@ -150,7 +210,7 @@ def extract_percentages(text: str) -> Set[str]:
 
 
 def extract_quantitative_claims(text: str) -> Set[str]:
-    return {_normalize(m) for m in _QUANT_RE.findall(text or "")}
+    return {_normalize(m) for m in _QUANT_RE.findall(_prepare(text or ""))}
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +225,9 @@ class ConstraintCheck:
     new_years: List[str] = field(default_factory=list)
     new_percentages: List[str] = field(default_factory=list)
     new_quantitative_claims: List[str] = field(default_factory=list)
+    # Subset of new_proper_nouns that appear in the job posting but not in the
+    # candidate's sources: the classic way a tailored CV gets embellished.
+    from_posting: List[str] = field(default_factory=list)
     severity: str = "clean"  # "clean" | "review_recommended"
 
     @property
@@ -187,6 +250,7 @@ class ConstraintCheck:
             "new_years": self.new_years,
             "new_percentages": self.new_percentages,
             "new_quantitative_claims": self.new_quantitative_claims,
+            "from_posting": self.from_posting,
             "total_flags": self.total_flags,
         }
 
@@ -199,6 +263,7 @@ class ConstraintCheck:
             new_years=list(d.get("new_years") or []),
             new_percentages=list(d.get("new_percentages") or []),
             new_quantitative_claims=list(d.get("new_quantitative_claims") or []),
+            from_posting=list(d.get("from_posting") or []),
             severity=d.get("severity") or "clean",
         )
 
@@ -208,13 +273,17 @@ def check_tailored_output(
     projects_text: str,
     tailored_text: str,
     job_context_text: str = "",
+    posting_text: str = "",
 ) -> ConstraintCheck:
     """Compare a tailored artifact against the sources it should be drawn from.
 
-    The "allowed" set is the union of facts in master CV + project gallery +
-    job context — the last one is important because a tailored output may
-    legitimately echo company name / location / required skills from the
-    posting itself.
+    The "allowed" set is master CV + project gallery + ``job_context_text``.
+    Pass only what the artifact may legitimately echo back as-is — for a cover
+    letter that's the target company / title / location; for a CV, nothing
+    (every CV fact is a claim about the candidate). Never pass the posting's
+    required skills here: that whitelisted exactly the skills a model is most
+    tempted to copy into the CV. Pass the posting via ``posting_text`` instead;
+    it is used only to label flagged terms that were lifted from it.
     """
     source = "\n".join([master_cv_text or "", projects_text or "", job_context_text or ""])
 
@@ -223,7 +292,7 @@ def check_tailored_output(
     src_pcts = extract_percentages(source)
     src_quant = extract_quantitative_claims(source)
 
-    out_nouns = extract_proper_nouns(tailored_text or "")
+    out_nouns = extract_proper_nouns(tailored_text or "", prose_filter=True)
     out_years = extract_years(tailored_text or "")
     out_pcts = extract_percentages(tailored_text or "")
     out_quant = extract_quantitative_claims(tailored_text or "")
@@ -232,6 +301,8 @@ def check_tailored_output(
     new_years = sorted(out_years - src_years)
     new_pcts = sorted(out_pcts - src_pcts)
     new_quant = sorted(out_quant - src_quant)
+    posting_nouns = extract_proper_nouns(posting_text) if posting_text else set()
+    from_posting = [n for n in new_nouns if n in posting_nouns]
 
     severity = "clean" if not (new_nouns or new_years or new_pcts or new_quant) else "review_recommended"
     return ConstraintCheck(
@@ -239,6 +310,7 @@ def check_tailored_output(
         new_years=new_years,
         new_percentages=new_pcts,
         new_quantitative_claims=new_quant,
+        from_posting=from_posting,
         severity=severity,
     )
 
@@ -248,6 +320,12 @@ def summarize(check: ConstraintCheck) -> str:
     if check.is_clean:
         return "✅ No new facts detected — output stays inside your master CV."
     parts = []
+    if check.from_posting:
+        sample = ", ".join(check.from_posting[:5])
+        parts.append(
+            f"{len(check.from_posting)} term(s) copied from the job posting that your "
+            f"CV doesn't contain ({sample}{'…' if len(check.from_posting) > 5 else ''})"
+        )
     if check.new_proper_nouns:
         sample = ", ".join(check.new_proper_nouns[:5])
         parts.append(f"{len(check.new_proper_nouns)} new skill/term ({sample}{'…' if len(check.new_proper_nouns) > 5 else ''})")

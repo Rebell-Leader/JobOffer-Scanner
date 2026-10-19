@@ -150,7 +150,9 @@ class TailoredCvConstraintJourney(unittest.TestCase):
     def test_clean_tailored_cv(self):
         from services.tailoring import generate_tailored_cv
 
-        clean_cv = "Senior Backend Engineer. Skills: Python, PostgreSQL, AWS at Globex."
+        # No seniority word: the master CV doesn't claim one ("Senior" here
+        # would be title inflation and is rightly flagged).
+        clean_cv = "Backend Engineer. Skills: Python, PostgreSQL, AWS at Globex."
         with e2e.mock_llm(handler=lambda prompt: clean_cv):
             art = generate_tailored_cv(self.user.id, self.app.id, model="fast")
         self.assertEqual(art.meta["constraint_check"]["severity"], "clean")

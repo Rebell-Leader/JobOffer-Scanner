@@ -184,3 +184,49 @@ class ApplicationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusBecomesStageTests(unittest.TestCase):
+    """Analytics and reminders read stages, so a status change must log one."""
+
+    def setUp(self):
+        from db.session import reset_engine_for_testing
+        from services.auth import register_user
+        reset_engine_for_testing("sqlite:///:memory:")
+        self.user = register_user("stage@example.com", "Sup3rSecret!")
+
+    def _save(self, status="saved"):
+        from services.applications import save_analysis
+        return save_analysis(
+            self.user.id, {"company_name": "Acme", "job_title": "Eng"},
+            {"verdict": {"verdict": "Recommended", "light": "green"}}, status=status,
+        )
+
+    def test_status_change_records_stage(self):
+        from services.applications import update_status
+        from services.stages import list_stages
+
+        app = self._save()
+        self.assertEqual(list_stages(self.user.id, app.id), [])
+        updated = update_status(self.user.id, app.id, status="rejected")
+        self.assertEqual([s.kind for s in list_stages(self.user.id, app.id)], ["rejected"])
+        self.assertEqual(updated.status, "rejected")
+
+    def test_saving_as_applied_records_stage_once(self):
+        from services.applications import update_status
+        from services.stages import list_stages
+
+        app = self._save(status="applied")
+        update_status(self.user.id, app.id, status="applied", notes="resent")
+        self.assertEqual([s.kind for s in list_stages(self.user.id, app.id)], ["applied"])
+
+    def test_existing_interview_stage_not_duplicated(self):
+        from services.applications import update_status
+        from services.stages import add_stage, list_stages
+
+        app = self._save(status="applied")
+        add_stage(self.user.id, app.id, "technical_interview")
+        update_status(self.user.id, app.id, status="saved")
+        update_status(self.user.id, app.id, status="interviewing")
+        kinds = [s.kind for s in list_stages(self.user.id, app.id)]
+        self.assertEqual(kinds.count("recruiter_screen"), 0)

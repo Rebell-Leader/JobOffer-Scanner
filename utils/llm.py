@@ -50,12 +50,12 @@ def register_usage_recorder(fn: UsageRecorder) -> None:
 # so model selection in the UI stays meaningful regardless of provider.
 TIER_MODELS = {
     "anthropic": {
-        "fast": os.getenv("ANTHROPIC_FAST_MODEL", "claude-haiku-4-5-20251001"),
-        "detailed": os.getenv("ANTHROPIC_DETAILED_MODEL", "claude-sonnet-4-6"),
+        "fast": os.getenv("ANTHROPIC_FAST_MODEL", "claude-haiku-5-5"),
+        "detailed": os.getenv("ANTHROPIC_DETAILED_MODEL", "claude-opus-5-5"),
     },
     "openai": {
-        "fast": os.getenv("OPENAI_FAST_MODEL", "gpt-4o-mini"),
-        "detailed": os.getenv("OPENAI_DETAILED_MODEL", "gpt-4o"),
+        "fast": os.getenv("OPENAI_FAST_MODEL", "gpt-5-mini"),
+        "detailed": os.getenv("OPENAI_DETAILED_MODEL", "gpt-5"),
     },
     "featherless": {
         "fast": os.getenv("FEATHERLESS_FAST_MODEL", "Qwen/Qwen3-32B"),
@@ -76,8 +76,25 @@ _AUTODETECT_ORDER = ["anthropic", "openai", "featherless"]
 _FEATHERLESS_BASE_URL = "https://api.featherless.ai/v1"
 
 DEFAULT_TEMPERATURE = env_float("LLM_TEMPERATURE", 0.4)
-DEFAULT_MAX_TOKENS = env_int("LLM_MAX_TOKENS", 2000)
+# Output budget per call. Current Claude models think by default and gpt-5 /
+# o-series models reason, and those tokens count against this cap — 2000 used
+# to truncate full reports (dropping the trailing verdict block) and could
+# leave reasoning models with an empty answer. 16k stays under SDK HTTP
+# timeouts for non-streaming calls; you only pay for tokens actually produced.
+DEFAULT_MAX_TOKENS = env_int("LLM_MAX_TOKENS", 16000)
 _MAX_RETRIES = env_int("LLM_MAX_RETRIES", 3)
+_TIMEOUT_SECONDS = env_float("LLM_TIMEOUT_SECONDS", 300.0)
+
+# Claude models before Opus 4.7 accept sampling params; newer ones (Opus 4.7+,
+# Sonnet 5+, Haiku 5.5, Fable) reject a non-default temperature with a 400.
+_ANTHROPIC_SAMPLING_MODELS = re.compile(
+    r"^claude-(?:3|(?:opus|sonnet|haiku)-4-(?:[0-6](?:-|$)|\d{8}))"
+)
+
+
+class LLMOutputError(RuntimeError):
+    """The provider answered, but the output is unusable (truncated, refused,
+    or empty). Deterministic for the same request, so it is never retried."""
 
 
 def _record_usage(provider: str, model: str, usage: Optional[dict]) -> None:
@@ -243,14 +260,30 @@ def get_completion(
             logger.warning(
                 "%s call failed (attempt %d/%d): %s", provider, attempt, _MAX_RETRIES, exc
             )
+            if not _is_retryable(exc):
+                break
             if attempt < _MAX_RETRIES:
-                time.sleep(2 ** (attempt - 1))  # 1s, 2s, 4s ...
+                time.sleep(2 ** attempt)  # 2s, 4s, 8s ...
+
+    if isinstance(last_error, LLMOutputError):
+        raise last_error
 
     # Honest failure: do NOT fabricate data for a real request.
     raise RuntimeError(
-        f"LLM request to provider '{provider}' (model '{resolved_model}') failed "
-        f"after {_MAX_RETRIES} attempts: {last_error}"
+        f"LLM request to provider '{provider}' (model '{resolved_model}') failed: "
+        f"{last_error}"
     )
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Transient failures (network, timeouts, 408/409/429, 5xx) are worth a
+    retry; a bad request, bad key, unknown model, or unusable output is not."""
+    if isinstance(exc, LLMOutputError):
+        return False
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and 400 <= status < 500:
+        return status in (408, 409, 429)
+    return True
 
 
 _DEFAULT_SYSTEM_PROMPT = (
@@ -272,14 +305,20 @@ def _complete_anthropic(
     from anthropic import Anthropic  # lazy import
 
     # The SDK reads ANTHROPIC_API_KEY and (optionally) ANTHROPIC_BASE_URL itself.
-    client = Anthropic()
-    resp = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    # Retries are owned by get_completion's loop, so the SDK's are disabled.
+    client = Anthropic(timeout=_TIMEOUT_SECONDS, max_retries=0)
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if _ANTHROPIC_SAMPLING_MODELS.match(model):
+        kwargs["temperature"] = temperature
+    effort = os.getenv("ANTHROPIC_EFFORT", "").strip().lower()
+    if effort:
+        kwargs["output_config"] = {"effort": effort}
+    resp = client.messages.create(**kwargs)
     parts = [
         getattr(block, "text", "")
         for block in resp.content
@@ -291,7 +330,12 @@ def _complete_anthropic(
         inp = getattr(u, "input_tokens", 0) or 0
         out = getattr(u, "output_tokens", 0) or 0
         usage = {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
-    return "".join(parts).strip(), usage
+    text = "".join(parts).strip()
+    stop_reason = getattr(resp, "stop_reason", None)
+    if stop_reason in ("max_tokens", "refusal") or not text:
+        _record_usage("anthropic", model, usage)  # tokens were still billed
+        raise LLMOutputError(_unusable_output_message(model, stop_reason, max_tokens))
+    return text, usage
 
 
 def _is_new_style_openai_model(model: str) -> bool:
@@ -314,13 +358,20 @@ def _complete_openai_compatible(
         client = OpenAI(
             base_url=_FEATHERLESS_BASE_URL,
             api_key=os.getenv("FEATHERLESS_API_KEY"),
-            timeout=60.0,
+            timeout=_TIMEOUT_SECONDS,
+            max_retries=0,
         )
     else:  # openai
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0)
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"), timeout=_TIMEOUT_SECONDS, max_retries=0
+        )
 
     # gpt-5 / o-series models use max_completion_tokens and reject temperature.
     if provider == "openai" and _is_new_style_openai_model(model):
+        extra: dict = {}
+        reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip().lower()
+        if reasoning_effort:
+            extra["reasoning_effort"] = reasoning_effort
         resp = client.chat.completions.create(
             model=model,
             max_completion_tokens=max_tokens,
@@ -328,6 +379,7 @@ def _complete_openai_compatible(
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
+            **extra,
         )
     else:
         resp = client.chat.completions.create(
@@ -349,7 +401,25 @@ def _complete_openai_compatible(
             "completion_tokens": completion_toks,
             "total_tokens": getattr(u, "total_tokens", 0) or (prompt_toks + completion_toks),
         }
-    return (resp.choices[0].message.content or "").strip(), usage
+    choice = resp.choices[0]
+    text = (choice.message.content or "").strip()
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason in ("length", "content_filter") or not text:
+        _record_usage(provider, model, usage)  # tokens were still billed
+        raise LLMOutputError(_unusable_output_message(model, finish_reason, max_tokens))
+    return text, usage
+
+
+def _unusable_output_message(model: str, reason: Optional[str], max_tokens: int) -> str:
+    if reason in ("max_tokens", "length"):
+        return (
+            f"Model '{model}' hit the {max_tokens}-token output limit, so its answer "
+            "was cut off. Raise LLM_MAX_TOKENS (reasoning/thinking tokens count "
+            "toward it) and retry."
+        )
+    if reason in ("refusal", "content_filter"):
+        return f"Model '{model}' declined to answer this request ({reason})."
+    return f"Model '{model}' returned an empty response (stop reason: {reason})."
 
 
 def _strip_reasoning_tokens(text: str) -> str:
@@ -463,8 +533,9 @@ real job, company, and compensation analysis.
 def ping_provider(provider: str) -> tuple[bool, str]:
     """Make a minimal real API call to verify a provider is reachable.
 
-    Uses the provider's fast-tier model and a 10-token prompt so the cost is
-    negligible. Returns ``(ok, human-readable message)``.
+    Uses the provider's fast-tier model and a one-word prompt so the cost is
+    negligible. The output cap leaves room for thinking/reasoning tokens, which
+    count toward it on current models. Returns ``(ok, human-readable message)``.
     """
     key_env = _PROVIDER_KEYS.get(provider, "")
     if not os.getenv(key_env):
@@ -474,10 +545,10 @@ def ping_provider(provider: str) -> tuple[bool, str]:
     prompt = "Reply with exactly one word: OK"
     try:
         if provider == "anthropic":
-            text, _ = _complete_anthropic(prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10)
+            text, _ = _complete_anthropic(prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 1024)
         else:
             text, _ = _complete_openai_compatible(
-                provider, prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 10
+                provider, prompt, model, _DEFAULT_SYSTEM_PROMPT, 0.0, 1024
             )
         return True, repr(text.strip()[:40])
     except Exception as exc:  # noqa: BLE001

@@ -21,7 +21,16 @@ from __future__ import annotations
 
 import io
 import re
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+# Unicode TTF bundled with the repo (DejaVu: Latin incl. Polish/Czech/Turkish,
+# Cyrillic, Greek, arrows, bullets, €). The built-in Helvetica is Latin-1 only,
+# so without it "Łukasz" exports as "?ukasz" — a corrupted CV the user might
+# send without noticing. PDF_FONT_DIR overrides the location.
+_FONT_FAMILY = "DejaVu"
+_FONT_FILES = {"": "DejaVuSans.ttf", "B": "DejaVuSans-Bold.ttf"}
+_DEFAULT_FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 
 class PDFExportError(RuntimeError):
@@ -58,9 +67,13 @@ def _ascii_safe(text: str) -> str:
     """Replace characters the built-in Helvetica font can't render.
 
     fpdf2's default core fonts are Latin-1. Em dashes, smart quotes, etc.
-    crash the renderer. Map the common offenders to plain ASCII.
+    crash the renderer, so the common offenders are mapped to plain ASCII
+    first (nicer output than the fallback below). LLM-generated CV/cover-
+    letter text is free-form, though, so any *other* out-of-Latin-1
+    character (CJK, Cyrillic, uncommon emoji, ...) still needs to not crash
+    the render -- those get replaced with "?" rather than raising.
     """
-    return (
+    mapped = (
         text.replace("—", "-")    # em dash
             .replace("–", "-")    # en dash
             .replace("‘", "'")
@@ -77,6 +90,18 @@ def _ascii_safe(text: str) -> str:
             .replace("✓", "[v]")  # check
             .replace("✗", "[x]")  # cross
     )
+    return mapped.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _font_dir() -> Optional[Path]:
+    from utils.env import env_str
+
+    d = Path(env_str("PDF_FONT_DIR") or _DEFAULT_FONT_DIR)
+    return d if all((d / f).is_file() for f in _FONT_FILES.values()) else None
+
+
+def _strip_invisible(text: str) -> str:
+    return text.replace("\u200b", "").replace("\ufeff", "")
 
 
 # ---------------------------------------------------------------------------
@@ -96,59 +121,73 @@ def markdown_to_pdf(text: str, title: str = "Document") -> bytes:
             "`pip install -e \".[pdf]\"`."
         ) from exc
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.set_margins(left=18, top=18, right=18)
-    pdf.add_page()
-    pdf.set_title(title)
+    try:
+        pdf = FPDF(orientation="P", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=18)
+        pdf.set_margins(left=18, top=18, right=18)
+        pdf.add_page()
+        pdf.set_title(title)
 
-    body_size = 11
-    line_height = 6
+        body_size = 11
+        line_height = 6
 
-    def _set_body():
-        pdf.set_font("Helvetica", size=body_size)
+        font_dir = _font_dir()
+        if font_dir is not None:
+            for style, filename in _FONT_FILES.items():
+                pdf.add_font(_FONT_FAMILY, style, str(font_dir / filename))
+            family, clean = _FONT_FAMILY, _strip_invisible
+        else:  # no TTF available: Latin-1 core font with lossy fallback
+            family, clean = "Helvetica", _ascii_safe
 
-    _set_body()
+        def _set_body():
+            pdf.set_font(family, size=body_size)
 
-    for raw_line in text.splitlines():
-        line = _ascii_safe(raw_line.rstrip())
+        _set_body()
 
-        # IMPORTANT: in fpdf2 2.7+, ``multi_cell(0, …)`` leaves the cursor at
-        # the right margin of the LAST rendered line — not back at l_margin.
-        # The next ``multi_cell(0, …)`` then computes an available width of 0
-        # and raises "Not enough horizontal space". Reset X every iteration.
-        pdf.set_x(pdf.l_margin)
+        for raw_line in text.splitlines():
+            line = clean(raw_line.rstrip())
 
-        if not line.strip():
-            pdf.ln(line_height // 2)
-            continue
+            # IMPORTANT: in fpdf2 2.7+, ``multi_cell(0, …)`` leaves the cursor
+            # at the right margin of the LAST rendered line — not back at
+            # l_margin. The next ``multi_cell(0, …)`` then computes an
+            # available width of 0 and raises "Not enough horizontal space".
+            # Reset X every iteration.
+            pdf.set_x(pdf.l_margin)
 
-        if _HR_RE.match(line):
-            y = pdf.get_y() + 1
-            pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
-            pdf.ln(line_height // 2)
-            continue
+            if not line.strip():
+                pdf.ln(line_height // 2)
+                continue
 
-        m_head = _HEADING_RE.match(line)
-        if m_head:
-            level = len(m_head.group(1))
-            content = m_head.group(2).strip()
-            pdf.set_font("Helvetica", "B", _HEADING_SIZES.get(level, 11))
-            pdf.ln(2)
-            pdf.multi_cell(0, line_height + 1, content)
-            _set_body()
-            continue
+            if _HR_RE.match(line):
+                y = pdf.get_y() + 1
+                pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
+                pdf.ln(line_height // 2)
+                continue
 
-        m_bul = _BULLET_RE.match(line)
-        if m_bul:
-            _render_bullet(pdf, m_bul.group(1), line_height)
-            continue
+            m_head = _HEADING_RE.match(line)
+            if m_head:
+                level = len(m_head.group(1))
+                content = m_head.group(2).strip()
+                pdf.set_font(family, "B", _HEADING_SIZES.get(level, 11))
+                pdf.ln(2)
+                pdf.multi_cell(0, line_height + 1, content)
+                _set_body()
+                continue
 
-        _render_inline(pdf, line, line_height)
+            m_bul = _BULLET_RE.match(line)
+            if m_bul:
+                _render_bullet(pdf, m_bul.group(1), line_height)
+                continue
 
-    buf = io.BytesIO()
-    pdf.output(buf)
-    return buf.getvalue()
+            _render_inline(pdf, line, line_height)
+
+        buf = io.BytesIO()
+        pdf.output(buf)
+        return buf.getvalue()
+    except PDFExportError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalize any fpdf2 failure
+        raise PDFExportError(f"PDF rendering failed: {exc}") from exc
 
 
 def _render_inline(pdf, text: str, line_height: int) -> None:

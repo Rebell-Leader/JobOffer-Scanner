@@ -1,4 +1,4 @@
-import os
+import html
 from datetime import date, datetime, timedelta
 
 import altair as alt
@@ -137,6 +137,7 @@ from services.totp import (
 from services.totp import (
     verify_login as totp_verify_login,
 )
+from services.usage import BudgetExceeded
 from services.webhooks import (
     WebhookError,
     delete_webhook,
@@ -153,7 +154,7 @@ from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
-from utils.env import env_bool
+from utils.env import env_bool, env_str
 from utils.logging_setup import configure as configure_logging
 
 # Activation: a realistic sample posting new users can analyze in one click,
@@ -796,7 +797,9 @@ with st.sidebar.expander("🔐 Two-factor authentication"):
                 st.image(buf.getvalue(), caption="Scan in your authenticator app")
             except ImportError:
                 pass
-            with st.expander("Or enter the secret manually"):
+            # A checkbox, not an expander: this already sits inside the
+            # sidebar 2FA expander and Streamlit forbids nesting them.
+            if st.checkbox("Show the secret to enter manually", key="totp_show_secret"):
                 st.code(st.session_state.totp_setup_secret, language=None)
             with st.form("2fa_confirm_form"):
                 otp = st.text_input("Enter the current 6-digit code")
@@ -935,8 +938,9 @@ with st.sidebar.expander("📲 Link Telegram"):
             unlink(st.session_state.user_id)
             st.rerun()
 
-if os.getenv("TELEGRAM_BOT_USERNAME"):
-    bot_url = f"https://t.me/{os.getenv('TELEGRAM_BOT_USERNAME').lstrip('@')}"
+_telegram_bot_username = env_str("TELEGRAM_BOT_USERNAME")
+if _telegram_bot_username:
+    bot_url = f"https://t.me/{_telegram_bot_username.lstrip('@')}"
     st.sidebar.markdown(f"💬 [Use the Telegram bot]({bot_url})")
 
 st.sidebar.title("About")
@@ -960,8 +964,10 @@ else:
 # Sign out lives at the bottom so it isn't the second sidebar click target.
 st.sidebar.markdown("---")
 if st.sidebar.button("Sign out", use_container_width=True):
-    for key in ("user_id", "user_email", "last_result", "last_inputs"):
-        st.session_state.pop(key, None)
+    # Clear everything: API-token values, billing-portal links, 2FA backup
+    # codes and import previews would otherwise carry over to the next login
+    # in this browser tab.
+    st.session_state.clear()
     st.rerun()
 
 analyze_tab, applications_tab, analytics_tab, cv_tab, test_tab = st.tabs(
@@ -972,6 +978,27 @@ analyze_tab, applications_tab, analytics_tab, cv_tab, test_tab = st.tabs(
 # ---------------------------------------------------------------------------
 # Analyze tab
 # ---------------------------------------------------------------------------
+
+def _is_operator() -> bool:
+    """Who may run live integration probes: ADMIN_EMAILS when set; otherwise
+    everyone on a self-hosted deployment (billing off), nobody on a paid one."""
+    admins = {e.strip().lower() for e in (env_str("ADMIN_EMAILS") or "").split(",") if e.strip()}
+    if admins:
+        return (st.session_state.get("user_email") or "").lower() in admins
+    from services.billing import billing_enabled
+    return not billing_enabled()
+
+
+def _render_sections(value) -> None:
+    """Render a stage output (a dict of markdown sections) as markdown."""
+    if isinstance(value, dict) and all(isinstance(v, str) for v in value.values()):
+        for section in value.values():
+            st.markdown(section)
+    elif isinstance(value, str):
+        st.markdown(value)
+    else:
+        st.write(value)
+
 
 def render_result(result: dict) -> None:
     verdict = result.get("verdict") or {}
@@ -989,7 +1016,21 @@ def render_result(result: dict) -> None:
             st.write(f"- {reason}")
 
     with st.expander("🎯 Job Analysis", expanded=True):
-        st.write(result["job_details"])
+        extracted = result["job_details"].get("extracted_details") or {}
+        if isinstance(extracted, dict) and extracted:
+            for label, key in (
+                ("Company", "company_name"), ("Position", "job_title"),
+                ("Location", "location"), ("Experience", "experience_level"),
+                ("Type", "job_type"), ("Compensation", "compensation"),
+            ):
+                st.markdown(f"**{label}:** {extracted.get(key) or 'Not specified'}")
+            responsibilities = extracted.get("responsibilities") or []
+            if responsibilities:
+                st.markdown("**Responsibilities**")
+                for item in responsibilities:
+                    st.markdown(f"- {item}")
+        else:
+            st.write(result["job_details"])
         requirements = result["job_details"].get("requirements_analysis", {})
         tech_skills = requirements.get("technical_skills", []) if isinstance(requirements, dict) else []
         if tech_skills:
@@ -998,10 +1039,10 @@ def render_result(result: dict) -> None:
                 st.write(f"- {skill}")
 
     with st.expander("🏢 Company Research", expanded=True):
-        st.write(result["company_analysis"])
+        _render_sections(result["company_analysis"])
 
     with st.expander("💰 Compensation Analysis", expanded=True):
-        st.write(result["salary_analysis"])
+        _render_sections(result["salary_analysis"])
 
     resume_analysis = result.get("resume_analysis") or {}
     if resume_analysis:
@@ -1031,14 +1072,14 @@ def render_result(result: dict) -> None:
                 st.markdown("**✅ Matched required skills**")
                 if matched:
                     for s in matched:
-                        st.markdown(f"<span style='color:#22c55e'>✓</span> {s}", unsafe_allow_html=True)
+                        st.markdown(f"<span style='color:#22c55e'>✓</span> {html.escape(str(s))}", unsafe_allow_html=True)
                 else:
                     st.caption("_None matched — review the missing list._")
             with sk_col_g:
                 st.markdown("**❌ Missing required skills**")
                 if missing:
                     for s in missing:
-                        st.markdown(f"<span style='color:#ef4444'>✗</span> {s}", unsafe_allow_html=True)
+                        st.markdown(f"<span style='color:#ef4444'>✗</span> {html.escape(str(s))}", unsafe_allow_html=True)
                 else:
                     st.caption("_All required skills detected._")
 
@@ -1213,11 +1254,15 @@ with analyze_tab:
                     st.success(f"Fetched {len(posting_text)} characters from URL.")
                 except ValueError as exc:
                     st.error(str(exc))
-                    if not posting_text:
-                        st.info(
-                            "💡 The URL couldn't be parsed (JS-rendered or access-denied). "
-                            "Copy the job text and paste it in the **📝 Paste text** tab."
-                        )
+                    # Never fall back to whatever sits in the Paste tab: it may be
+                    # an older posting (or the sample), which would be analyzed
+                    # and saved under the wrong company without any warning.
+                    posting_text = ""
+                    st.info(
+                        "💡 The URL couldn't be parsed (JS-rendered or access-denied). "
+                        "Copy the job text into the **📝 Paste text** tab, clear the URL "
+                        "field, and analyze again."
+                    )
         elif raw_url_input and not is_url(raw_url_input) and len(raw_url_input) > 80:
             # User pasted job description text into the URL field — route correctly.
             st.info(
@@ -1235,10 +1280,11 @@ with analyze_tab:
                 st.error(f"Resume parsing failed: {exc}")
 
         if not posting_text:
-            st.warning(
-                "We need either a fetchable URL or pasted job-description text "
-                "to start. Add one of those and try again."
-            )
+            if not (raw_url_input and is_url(raw_url_input)):
+                st.warning(
+                    "We need either a fetchable URL or pasted job-description text "
+                    "to start. Add one of those and try again."
+                )
         else:
             # Manual fields are now hints, not requirements — extraction fills the gaps.
             job_data = {
@@ -1379,16 +1425,25 @@ with analyze_tab:
 
         with st.form("save_application_form"):
             st.markdown("### Save to applications")
+            last_inputs = dict(st.session_state.get("last_inputs") or {})
+            # Editable here so a posting that doesn't name the employer (or a
+            # mis-extracted title) can still be saved without re-running.
+            col_c, col_t = st.columns(2)
+            with col_c:
+                save_company = st.text_input("Company", last_inputs.get("company_name") or "")
+            with col_t:
+                save_title = st.text_input("Job title", last_inputs.get("job_title") or "")
             col_s, col_n = st.columns([1, 3])
             with col_s:
                 save_status = st.selectbox("Status", APPLICATION_STATUSES, index=0)
             with col_n:
                 save_notes = st.text_input("Notes (optional)", "")
             if st.form_submit_button("💾 Save analysis", type="primary"):
+                last_inputs.update(company_name=save_company.strip(), job_title=save_title.strip())
                 try:
                     save_analysis(
                         user_id=st.session_state.user_id,
-                        manual_inputs=st.session_state.last_inputs,
+                        manual_inputs=last_inputs,
                         analysis_result=st.session_state.last_result,
                         status=save_status,
                         notes=save_notes or None,
@@ -1439,9 +1494,13 @@ with applications_tab:
             if st.button("Parse with LLM", key="app_free_preview"):
                 with st.spinner("Parsing applications…"):
                     try:
-                        st.session_state["app_import_previews"] = parse_applications_freeform(app_free)
-                    except BulkImportError as exc:
+                        st.session_state["app_import_previews"] = parse_applications_freeform(
+                            app_free, user_id=st.session_state.user_id
+                        )
+                    except (BulkImportError, BudgetExceeded, BillingTierError) as exc:
                         st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                        st.error(f"Parsing failed: {exc}")
 
         app_previews = st.session_state.get("app_import_previews") or []
         if app_previews:
@@ -1773,8 +1832,10 @@ with applications_tab:
                                     )
                                     st.success(f"Saved tailored CV #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError, BillingTierError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError, BudgetExceeded) as exc:
                                     st.error(str(exc))
+                                except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                                    st.error(f"Generation failed, nothing was saved: {exc}")
                     with art_col2:
                         # Tone preset for cover letters — persists per-application
                         # in session_state so the user's last choice sticks.
@@ -1796,8 +1857,10 @@ with applications_tab:
                                     )
                                     st.success(f"Saved cover letter #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError, BillingTierError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError, BudgetExceeded) as exc:
                                     st.error(str(exc))
+                                except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                                    st.error(f"Generation failed, nothing was saved: {exc}")
 
                 # List existing artifacts (newest first).
                 arts = list_artifacts(st.session_state.user_id, rec.id)
@@ -1998,7 +2061,7 @@ with applications_tab:
                     revoke as revoke_share,
                 )
                 if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):
-                    base_url = os.getenv("APP_BASE_URL", "").rstrip("/")
+                    base_url = env_str("APP_BASE_URL", "").rstrip("/")
                     existing_shares = list_shares_for_application(
                         st.session_state.user_id, rec.id,
                     )
@@ -2302,8 +2365,10 @@ with cv_tab:
                             structured = parse_master_cv(st.session_state.user_id)
                             st.success("Parsed.")
                             st.json(structured)
-                        except MasterCVError as exc:
+                        except (MasterCVError, BudgetExceeded, BillingTierError) as exc:
                             st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                            st.error(f"Parsing failed: {exc}")
             with pdf_col:
                 try:
                     cv_pdf = markdown_to_pdf(
@@ -2462,9 +2527,13 @@ with cv_tab:
                 if st.button("Parse with LLM", key="proj_free_preview"):
                     with st.spinner("Parsing projects…"):
                         try:
-                            st.session_state["proj_import_previews"] = parse_projects_freeform(free_text)
-                        except BulkImportError as exc:
+                            st.session_state["proj_import_previews"] = parse_projects_freeform(
+                                free_text, user_id=st.session_state.user_id
+                            )
+                        except (BulkImportError, BudgetExceeded, BillingTierError) as exc:
                             st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                            st.error(f"Parsing failed: {exc}")
 
             previews = st.session_state.get("proj_import_previews") or []
             if previews:
@@ -2598,109 +2667,112 @@ with cv_tab:
 # ---------------------------------------------------------------------------
 
 with test_tab:
-    st.header("🧪 System health check")
-    st.caption(
-        "Runs a lightweight probe of every configured integration. "
-        "LLM probes make one tiny real API call (~10 tokens) so actual "
-        "connectivity is verified. Everything else is connection-level only — "
-        "no writes, no side-effects."
-    )
-
-    run_test_btn = st.button("▶ Run system test", type="primary", key="run_system_test_btn")
-
-    if run_test_btn:
-        st.session_state["system_test_results"] = None  # clear stale results
-
-    if run_test_btn or st.session_state.get("system_test_results") is not None:
-        if run_test_btn:
-            from services.system_test import run_system_test
-            with st.spinner("Running probes…"):
-                results = run_system_test()
-            st.session_state["system_test_results"] = results
-        else:
-            results = st.session_state["system_test_results"]
-
-        # ── results table ────────────────────────────────────────────────────
-        st.subheader("Test results")
-        all_ok = all(r.ok or r.skipped for r in results)
-        if all_ok:
-            st.success("All configured integrations passed ✅")
-        else:
-            failures = [r.name for r in results if not r.ok and not r.skipped]
-            st.error(f"Issues detected with: {', '.join(failures)}")
-
-        for r in results:
-            cols = st.columns([0.05, 0.35, 0.45, 0.15])
-            cols[0].markdown(r.icon)
-            cols[1].markdown(f"**{r.name}**")
-            cols[2].markdown(r.message)
-            cols[3].markdown(r.duration_str if not r.skipped else "_skipped_")
-
-        st.divider()
-
-        # ── mock demo analysis display ───────────────────────────────────────
-        st.subheader("📋 Demo analysis")
-        st.caption(
-            "Pre-baked sample — shows every UI section without spending LLM tokens. "
-            "This is what a real analysis looks like."
-        )
-
-        from services.system_test import MOCK_ANALYSIS
-        mock = MOCK_ANALYSIS
-        details = mock["job_details"]["extracted_details"]
-        req = mock["job_details"]["requirements_analysis"]
-        verdict = mock["verdict"]
-
-        # Verdict banner
-        confidence = verdict.get("confidence", 0)
-        decision = verdict.get("decision", "")
-        verdict_color = {"Apply": "green", "Consider": "orange", "Avoid": "red"}.get(decision, "blue")
-        st.markdown(
-            f"**Verdict:** :{verdict_color}[{decision}] &nbsp;·&nbsp; "
-            f"Confidence **{confidence}/10**"
-        )
-
-        reason_cols = st.columns(2)
-        with reason_cols[0]:
-            st.markdown("**Why apply**")
-            for r in verdict.get("reasons", []):
-                st.markdown(f"- {r}")
-        with reason_cols[1]:
-            st.markdown("**Watch-outs**")
-            for c in verdict.get("cautions", []):
-                st.markdown(f"- {c}")
-
-        st.divider()
-
-        # Job details
-        d1, d2 = st.columns(2)
-        with d1:
-            st.markdown("**Position**")
-            st.markdown(f"🏢 {details.get('company_name', '')}")
-            st.markdown(f"💼 {details.get('job_title', '')}")
-            st.markdown(f"📍 {details.get('location', '')}")
-            st.markdown(f"💰 {details.get('compensation', '')}")
-        with d2:
-            st.markdown("**Required skills**")
-            for skill in req.get("technical_skills", []):
-                st.markdown(f"- {skill}")
-
-        st.divider()
-
-        # Analysis sections (company / salary / report)
-        for section_key, section_label in [
-            ("company_analysis", "Company analysis"),
-            ("salary_analysis", "Compensation analysis"),
-        ]:
-            section = mock.get(section_key, {})
-            if section:
-                st.markdown(f"**{section_label}**")
-                for _k, v in section.items():
-                    st.markdown(v)
-                st.divider()
-
-        st.markdown("**Full report**")
-        st.markdown(mock.get("final_report", ""))
-
+    if not _is_operator():
+        st.info("System checks are available to the operator of this deployment.")
     else:
-        st.info("Click **▶ Run system test** above to probe all configured integrations.")
+        st.header("🧪 System health check")
+        st.caption(
+            "Runs a lightweight probe of every configured integration. "
+            "LLM probes make one tiny real API call (~10 tokens) so actual "
+            "connectivity is verified. Everything else is connection-level only — "
+            "no writes, no side-effects."
+        )
+
+        run_test_btn = st.button("▶ Run system test", type="primary", key="run_system_test_btn")
+
+        if run_test_btn:
+            st.session_state["system_test_results"] = None  # clear stale results
+
+        if run_test_btn or st.session_state.get("system_test_results") is not None:
+            if run_test_btn:
+                from services.system_test import run_system_test
+                with st.spinner("Running probes…"):
+                    results = run_system_test()
+                st.session_state["system_test_results"] = results
+            else:
+                results = st.session_state["system_test_results"]
+
+            # ── results table ────────────────────────────────────────────────────
+            st.subheader("Test results")
+            all_ok = all(r.ok or r.skipped for r in results)
+            if all_ok:
+                st.success("All configured integrations passed ✅")
+            else:
+                failures = [r.name for r in results if not r.ok and not r.skipped]
+                st.error(f"Issues detected with: {', '.join(failures)}")
+
+            for r in results:
+                cols = st.columns([0.05, 0.35, 0.45, 0.15])
+                cols[0].markdown(r.icon)
+                cols[1].markdown(f"**{r.name}**")
+                cols[2].markdown(r.message)
+                cols[3].markdown(r.duration_str if not r.skipped else "_skipped_")
+
+            st.divider()
+
+            # ── mock demo analysis display ───────────────────────────────────────
+            st.subheader("📋 Demo analysis")
+            st.caption(
+                "Pre-baked sample — shows every UI section without spending LLM tokens. "
+                "This is what a real analysis looks like."
+            )
+
+            from services.system_test import MOCK_ANALYSIS
+            mock = MOCK_ANALYSIS
+            details = mock["job_details"]["extracted_details"]
+            req = mock["job_details"]["requirements_analysis"]
+            verdict = mock["verdict"]
+
+            # Verdict banner
+            confidence = verdict.get("confidence", 0)
+            decision = verdict.get("decision", "")
+            verdict_color = {"Apply": "green", "Consider": "orange", "Avoid": "red"}.get(decision, "blue")
+            st.markdown(
+                f"**Verdict:** :{verdict_color}[{decision}] &nbsp;·&nbsp; "
+                f"Confidence **{confidence}/10**"
+            )
+
+            reason_cols = st.columns(2)
+            with reason_cols[0]:
+                st.markdown("**Why apply**")
+                for r in verdict.get("reasons", []):
+                    st.markdown(f"- {r}")
+            with reason_cols[1]:
+                st.markdown("**Watch-outs**")
+                for c in verdict.get("cautions", []):
+                    st.markdown(f"- {c}")
+
+            st.divider()
+
+            # Job details
+            d1, d2 = st.columns(2)
+            with d1:
+                st.markdown("**Position**")
+                st.markdown(f"🏢 {details.get('company_name', '')}")
+                st.markdown(f"💼 {details.get('job_title', '')}")
+                st.markdown(f"📍 {details.get('location', '')}")
+                st.markdown(f"💰 {details.get('compensation', '')}")
+            with d2:
+                st.markdown("**Required skills**")
+                for skill in req.get("technical_skills", []):
+                    st.markdown(f"- {skill}")
+
+            st.divider()
+
+            # Analysis sections (company / salary / report)
+            for section_key, section_label in [
+                ("company_analysis", "Company analysis"),
+                ("salary_analysis", "Compensation analysis"),
+            ]:
+                section = mock.get(section_key, {})
+                if section:
+                    st.markdown(f"**{section_label}**")
+                    for _k, v in section.items():
+                        st.markdown(v)
+                    st.divider()
+
+            st.markdown("**Full report**")
+            st.markdown(mock.get("final_report", ""))
+
+        else:
+            st.info("Click **▶ Run system test** above to probe all configured integrations.")

@@ -17,7 +17,7 @@ a runbook nobody trusts is worse than none.
 | Web UI           | `streamlit run app.py` (:5000)               | page loads, auth gate renders |
 | REST API         | `python -m api.main` (:8000)                 | `GET /healthz` → `{"ok": true}` |
 | Worker (opt.)    | `celery -A worker.celery_app:app worker`     | tasks leave `PENDING` |
-| Reminders (cron) | `python -m worker.reminders`                 | exits 0 |
+| Scheduler        | `python -m worker.scheduler` (compose service) or external cron/Scheduled Deployment | logs a reminder/backup run each interval |
 | Postgres         | managed / compose `postgres` service         | `pg_isready` |
 | Redis (opt.)     | managed / compose `redis` service            | `redis-cli ping` → PONG |
 
@@ -50,11 +50,17 @@ BACKUP_UPLOAD_CMD="rclone copyto remote:joc/" ...
 ```
 
 ### Schedule
-- **Docker Compose / VM:** cron, e.g. nightly at 03:17 UTC:
+- **Docker Compose:** `docker compose up` already brings up a `scheduler`
+  service (`python -m worker.scheduler`, `worker/scheduler.py`) that runs
+  both this and the inactivity reminders on a timer (`BACKUP_INTERVAL_HOURS`,
+  default 24) — no host crontab needed.
+- **VM without Compose:** cron, e.g. nightly at 03:17 UTC:
   ```cron
   17 3 * * * cd /srv/joboffer && DATABASE_URL=… ./scripts/backup_db.sh >> /var/log/joc-backup.log 2>&1
   ```
-- **Replit:** a Scheduled Deployment running the same command.
+- **Replit:** a Scheduled Deployment running the same command — Replit has no
+  long-running-process deployment target for a timer loop, so `worker/scheduler.py`
+  doesn't apply there.
 - Keep ≥14 days local; rely on the offsite bucket's lifecycle for long-term.
 
 ### Verify (don't trust an unread backup)

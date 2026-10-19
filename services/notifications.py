@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from services.email import send_email
 from services.telegram_link import get_link, send_to_user
+from utils.env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def _reset_link_or_token(token: str) -> str:
     """Render the reset instruction — a full link if APP_BASE_URL is set, else
     the raw token to paste into the 'Use reset token' tab."""
-    base = os.getenv("APP_BASE_URL")
+    base = env_str("APP_BASE_URL")
     if base:
         return f"{base.rstrip('/')}/?reset_token={token}"
     return f"Reset token: {token}"
@@ -22,7 +22,7 @@ def _reset_link_or_token(token: str) -> str:
 
 def send_verification_email(email: str, token: str) -> bool:
     """Email an email-verification token/link. Best-effort (False if no SMTP)."""
-    base = os.getenv("APP_BASE_URL")
+    base = env_str("APP_BASE_URL")
     instruction = (
         f"{base.rstrip('/')}/?verify_token={token}" if base
         else f"Verification token: {token}"

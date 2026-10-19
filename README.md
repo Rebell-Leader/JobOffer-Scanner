@@ -433,25 +433,31 @@ round-trip requires running outside the allowlist (or adding these hosts to it).
 
 ## 🚀 Quick Start
 
-1. **Clone and Setup**:
-   ```bash
-   # The project runs on Replit - click "Run" to start
-   # or manually run:
-   streamlit run app.py
-   ```
+**Local (single user, SQLite):**
 
-2. **Environment Variables**:
-   ```bash
-   # Add your API keys to .env file:
-   OPENAI_API_KEY=your_openai_key_here
-   # Add other API keys as you integrate real data sources
-   ```
+```bash
+uv sync --python 3.11 --extra research --extra pdf   # Python 3.11/3.12 (not 3.14)
+cp .env.example .env        # set ANTHROPIC_API_KEY=... (or OPENAI_API_KEY=...)
+./scripts/run_local.sh      # http://127.0.0.1:5000
+```
 
-3. **Usage**:
-   - Select analysis model (Fast or Detailed)
-   - Fill in basic job details
-   - Paste the full job description
-   - Click "Analyze Job" and wait for results
+`run_local.sh` exports `.env` (nothing in the app reads `.env` by itself),
+applies Alembic migrations to `./data/joboffer.db`, and binds to localhost
+only. If you run `streamlit run app.py` directly, export your keys into the
+shell first or the app silently runs in demo mode.
+
+**Usage:**
+- Register an account (no email server needed locally).
+- **CV & Projects** tab: upload or paste your master CV (every tailored
+  document is checked against it).
+- **Analyze a posting**: paste the text (most reliable) or a URL; optionally
+  attach your resume for the ATS match.
+- Save the analysis to **My Applications**, log stages, generate a tailored CV
+  or cover letter, review the "new facts" check, export PDF.
+
+**Full stack (Docker Compose):** `docker compose up --build` (web + worker +
+Redis + Postgres + scheduler). See `docs/ASSESSMENT.md` for the current
+state, known gaps, and the launch checklist.
 
 ## 📁 Project Structure
 

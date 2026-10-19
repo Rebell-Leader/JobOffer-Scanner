@@ -105,3 +105,30 @@ class SinkWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RedirectSsrfTests(unittest.TestCase):
+    """A public URL must not be able to bounce the fetcher to an internal host."""
+
+    def test_redirect_to_metadata_service_is_blocked(self):
+        import tools.url_ingest as url_ingest
+
+        class _Redirect:
+            is_redirect = True
+            headers = {"location": "http://169.254.169.254/latest/meta-data/"}
+            def close(self): pass
+
+        with mock.patch.object(url_ingest.requests, "get", return_value=_Redirect()) as get, \
+             mock.patch("utils.security.socket.getaddrinfo",
+                        return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+            with self.assertRaises(ValueError) as ctx:
+                url_ingest.fetch_job_posting("https://example.com/job/1")
+        self.assertIn("Redirect blocked", str(ctx.exception))
+        self.assertEqual(get.call_count, 1)  # never requested the internal hop
+        self.assertFalse(get.call_args.kwargs["allow_redirects"])
+
+    def test_cgnat_range_is_private(self):
+        from utils.security import check_url_allowed
+
+        ok, _ = check_url_allowed("http://100.100.100.200/latest/meta-data")
+        self.assertFalse(ok)

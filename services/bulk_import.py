@@ -115,12 +115,17 @@ Input:
 """
 
 
-def parse_projects_freeform(text: str, model: str = "detailed") -> List[dict]:
+def parse_projects_freeform(
+    text: str, model: str = "detailed", user_id: Optional[int] = None
+) -> List[dict]:
     """Use the LLM to extract projects from a free-form paste."""
     if not (text or "").strip():
         return []
     prompt = _PROJECT_PROMPT.format(wrapped=wrap_untrusted(text, "projects_dump"))
-    response = get_completion(prompt, model)
+    from services.analysis_runner import metered_llm
+
+    with metered_llm(user_id, model) as tier:
+        response = get_completion(prompt, tier)
     parsed = _strict_json_list(response)
     out = []
     for entry in parsed:
@@ -170,11 +175,35 @@ _APPLICATION_CSV_FIELDS = (
 )
 
 
+def _normalize_header(name: Optional[str]) -> str:
+    return re.sub(r"[\s-]+", "_", (name or "").strip().lower())
+
+
+# Common spreadsheet / tracker wordings for our statuses.
+_STATUS_SYNONYMS = {
+    "ghosted": "rejected", "declined": "rejected", "no response": "rejected",
+    "interview": "interviewing", "interviews": "interviewing", "screen": "interviewing",
+    "offered": "offer", "accepted": "offer", "withdrew": "withdrawn",
+    "wishlist": "saved", "to apply": "saved",
+}
+
+
+def _normalize_status(raw: Optional[str]) -> str:
+    """Case-insensitive status match ("Rejected" used to import as "applied")."""
+    status = (raw or "").strip().lower()
+    status = _STATUS_SYNONYMS.get(status, status)
+    # Unknown wordings fall back to a safe default rather than rejecting the row.
+    return status if status in APPLICATION_STATUSES else "applied"
+
+
 def parse_applications_csv(csv_text: str) -> List[dict]:
     """Parse an application CSV. Required headers: ``company_name``, ``job_title``."""
     if not (csv_text or "").strip():
         return []
-    reader = csv.DictReader(io.StringIO(csv_text))
+    # Excel prepends a BOM, and spreadsheets rarely match header case exactly.
+    reader = csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff")))
+    if reader.fieldnames:
+        reader.fieldnames = [_normalize_header(h) for h in reader.fieldnames]
     if not reader.fieldnames or not {"company_name", "job_title"}.issubset(reader.fieldnames):
         raise BulkImportError(
             "CSV must include 'company_name' and 'job_title' columns. Other "
@@ -186,11 +215,7 @@ def parse_applications_csv(csv_text: str) -> List[dict]:
         title = (row.get("job_title") or "").strip()
         if not company or not title:
             continue
-        status = (row.get("status") or "").strip() or "applied"
-        if status not in APPLICATION_STATUSES:
-            # Don't reject the whole row — fall back to a safe default so
-            # imports from other tools' free-form statuses still work.
-            status = "applied"
+        status = _normalize_status(row.get("status"))
         out.append(
             {
                 "company_name": company,
@@ -236,11 +261,16 @@ Input:
 """
 
 
-def parse_applications_freeform(text: str, model: str = "detailed") -> List[dict]:
+def parse_applications_freeform(
+    text: str, model: str = "detailed", user_id: Optional[int] = None
+) -> List[dict]:
     if not (text or "").strip():
         return []
     prompt = _APPLICATION_PROMPT.format(wrapped=wrap_untrusted(text, "applications_dump"))
-    response = get_completion(prompt, model)
+    from services.analysis_runner import metered_llm
+
+    with metered_llm(user_id, model) as tier:
+        response = get_completion(prompt, tier)
     parsed = _strict_json_list(response)
     out = []
     for entry in parsed:
@@ -250,9 +280,7 @@ def parse_applications_freeform(text: str, model: str = "detailed") -> List[dict
         title = (entry.get("job_title") or "").strip()
         if not company or not title:
             continue
-        status = (entry.get("status") or "applied").strip()
-        if status not in APPLICATION_STATUSES:
-            status = "applied"
+        status = _normalize_status(entry.get("status"))
         out.append(
             {
                 "company_name": company,
@@ -327,6 +355,9 @@ def save_applications(user_id: int, previews: List[dict]) -> List[int]:
             analysis,
             status=status,
             notes=p.get("notes"),
+            # Dated rows get their own stage history below; undated ones would
+            # otherwise have no stage at all and never reach analytics.
+            record_stage=not p.get("applied_on"),
         )
         applied_on = p.get("applied_on")
         # Materialise stages matching the imported status so auto-status-sync
