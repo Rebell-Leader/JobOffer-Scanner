@@ -22,13 +22,16 @@ Postgres); a `docker-compose.yml` runs the full multi-service stack.
 
 ```
 app.py                  Streamlit web UI (single entry; all tabs + sidebar)
-agents/                 LangGraph pipeline: orchestrator + per-stage agents
-  orchestrator.py       Checkpoint-aware graph: job -> (company || salary) -> resume? -> report
+ui/                     New UI modules split out of app.py (discover tab,
+                        search-profile editor); app.py calls render_* funcs
+agents/                 Analysis pipeline: orchestrator + per-stage agents
+  orchestrator.py       Checkpointed stage sequence: job -> (company || salary) -> resume? -> report
   job_/company_/salary_/resume_analyzer.py, report_generator.py
 tools/                  LLM-facing tools + ingestion
   job_tools, company_tools, salary_tools, resume_tools, data_sources,
   url_ingest, browser_scraper (Playwright, optional), html_extract (shared),
-  company_research (agentic keyless DuckDuckGo + Browserbase fallback)
+  company_research (Claude web research; keyless DuckDuckGo fallback),
+  job_sources (discovery connectors: public ATS + job-board APIs only)
 services/               Business logic (34 modules) — the bulk of the app
   auth, totp, oauth, api_tokens, rate_limit, audit          (identity/security)
   applications, stages, analytics, timeline, background_analysis  (tracking)
@@ -67,7 +70,7 @@ app.py / api/ / bot/        entry points (UI, REST, Telegram)
         ▼
       db/                    SQLAlchemy models + session
 
-agents/  (LangGraph pipeline)  ─┐
+agents/  (analysis pipeline)   ─┐
 tools/   (LLM-facing tools)     ├─▶  utils/   (LEAF — depends on nothing internal)
                                 ─┘
 worker/  (Celery) consumes services; runs the same pipeline off-process.
@@ -92,6 +95,20 @@ worker/  (Celery) consumes services; runs the same pipeline off-process.
   `from utils import cache`. The `utils/` and `tools/` `__init__.py` are
   intentionally empty (no symbol re-exports) so a submodule is never shadowed
   by a same-named re-exported value.
+
+### Feature isolation (personal mode)
+
+- **Core vs side features** are declared once in `utils/features.py`. Side
+  features (accounts, billing, api_tokens, webhooks, telegram,
+  notifications, sharing, background, audit_log, rate_limits) are checked
+  with `feature_enabled("<name>")`. `PERSONAL_MODE=1` turns them all off.
+- **What "off" means:** the web app doesn't import their modules (app.py
+  imports them inside `if not PERSONAL_MODE:`); service-level side effects
+  (webhook dispatch in stages/applications, billing gates in
+  `analysis_runner`) are skipped.
+- **Enforced by** `PersonalModeIsolationTests` (fresh subprocess, asserts no
+  side-feature module is loaded). Keep new side-feature imports out of
+  core modules, or make them lazy.
 
 ### Shared helpers — use these, don't re-roll them
 
@@ -212,6 +229,21 @@ same canned "TechCorp" text regardless of input) to the current product:
   reverse-proxy CSP/HSTS configs, Replit deployment (live).
 
 ## Production-readiness roadmap (what's left)
+
+> **Personal mode** (`PERSONAL_MODE=1`, default in `scripts/run_local.sh`):
+> single local owner (`services/personal`), no auth/billing/quota UI. Search
+> profile in `services/profile` (JSON doc, table `candidate_profiles`) feeds
+> the report's "Fit for You" + verdict, discovery and triage. Job discovery:
+> connectors in `tools/job_sources` (public ATS + job-board APIs only),
+> pipeline in `services/discovery` (table `discovered_jobs`). Claude web
+> research (`utils/llm.web_research`, server-side web search/fetch) powers
+> company + salary research when an Anthropic key is set.
+>
+> **Superseded in part by `docs/ASSESSMENT.md` (2026-10-19)**: the current
+> verified state, remaining paid-launch blockers, and P1 backlog. Some items
+> marked ✅ below were not actually true at that point (e.g. 5
+> `use_container_width` sites remain). Local single-user launch:
+> `./scripts/run_local.sh` (nothing in the app loads `.env` by itself).
 
 The app is feature-complete and deployed, but several things stand between it
 and "production-grade for real multi-user traffic." Prioritized:

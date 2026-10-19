@@ -81,9 +81,13 @@ def _ip_is_private(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    # ``not is_global`` also covers shared/CGNAT space (100.64.0.0/10, which
+    # hosts e.g. Alibaba's 100.100.100.200 metadata service) and other
+    # special-purpose ranges the explicit flags miss.
     return (
         addr.is_private or addr.is_loopback or addr.is_link_local
         or addr.is_reserved or addr.is_multicast or addr.is_unspecified
+        or not addr.is_global
     )
 
 

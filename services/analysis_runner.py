@@ -10,10 +10,12 @@ Callers don't need to know whether a Celery broker is configured:
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from services.rate_limit import ANALYSIS_LIMITER, RateLimitExceeded
+from utils.features import enabled as feature_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +32,43 @@ def check_user_quota(user_id: Optional[int]) -> None:
     """
     if user_id is None:
         return
-    decision = ANALYSIS_LIMITER.check(str(user_id))
-    if not decision.allowed:
-        raise RateLimitExceeded(decision.retry_after)
+    if feature_enabled("rate_limits"):
+        decision = ANALYSIS_LIMITER.check(str(user_id))
+        if not decision.allowed:
+            raise RateLimitExceeded(decision.retry_after)
     from services.usage import check_budget
 
     check_budget(user_id)
-    from services.billing import check_and_record_analysis
+    if feature_enabled("billing"):
+        from services.billing import check_and_record_analysis
 
-    check_and_record_analysis(user_id)
+        check_and_record_analysis(user_id)
+
+
+@contextlib.contextmanager
+def metered_llm(user_id: Optional[int], model: str = "detailed") -> Iterator[str]:
+    """Gate and attribute an auxiliary LLM feature (CV parsing, bulk import,
+    tailoring). Yields the model tier to use.
+
+    Analyses go through :func:`check_user_quota`; these features used to call
+    the LLM with no budget check at all, on the detailed model, with spend
+    ledgered to no user — an unlimited free-tier cost hole. This applies the
+    operator spend budget, the plan's LLM allowance and model clamp, and opens
+    the usage-attribution scope. ``None`` (no user) only attributes nothing.
+    """
+    from services.usage import account
+
+    if user_id is not None:
+        from services.usage import check_budget
+
+        check_budget(user_id)  # LLM_BUDGET_USD, a personal cap too
+        if feature_enabled("billing"):
+            from services.billing import check_llm_allowance, clamp_model
+
+            check_llm_allowance(user_id)
+            model = clamp_model(user_id, model)
+    with account(user_id):
+        yield model
 
 
 def async_enabled() -> bool:
@@ -57,8 +87,12 @@ def run_analysis_sync(
     resume_text: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
     user_id: Optional[int] = None,
+    profile_text: Optional[str] = None,
 ) -> dict:
     """Run analysis in-process. Used by the interactive Streamlit flow.
+
+    ``profile_text`` defaults to the user's saved search profile, so every
+    entry point gets a personalised verdict without passing it explicitly.
 
     ``user_id`` (when given) opens a usage-accounting scope so every LLM call
     in the pipeline is attributed to that user for cost controls.
@@ -66,6 +100,10 @@ def run_analysis_sync(
     from agents.orchestrator import run_analysis
     from services.usage import account
 
+    if profile_text is None and user_id is not None:
+        from services.profile import profile_prompt_for
+
+        profile_text = profile_prompt_for(user_id)
     with account(user_id):
         return run_analysis(
             job_posting,
@@ -73,6 +111,7 @@ def run_analysis_sync(
             model=model,
             progress_callback=progress_callback,
             resume_text=resume_text,
+            profile_text=profile_text,
         )
 
 

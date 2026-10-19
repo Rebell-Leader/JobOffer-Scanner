@@ -426,32 +426,47 @@ round-trip requires running outside the allowlist (or adding these hosts to it).
 ## 🛠️ Technology Stack
 
 - **Frontend**: Streamlit
-- **Backend**: Python with LangChain/LangGraph
+- **Backend**: Python; a checkpointed multi-stage LLM pipeline (Anthropic / OpenAI / Featherless) with Claude web research
 - **AI Models**: Support for multiple LLMs (OpenAI, DeepSeek, Qwen)
 - **Caching**: In-memory caching system
 - **Architecture**: Agent-based orchestration pattern
 
 ## 🚀 Quick Start
 
-1. **Clone and Setup**:
-   ```bash
-   # The project runs on Replit - click "Run" to start
-   # or manually run:
-   streamlit run app.py
-   ```
+**Local (single user, SQLite):**
 
-2. **Environment Variables**:
-   ```bash
-   # Add your API keys to .env file:
-   OPENAI_API_KEY=your_openai_key_here
-   # Add other API keys as you integrate real data sources
-   ```
+```bash
+uv sync --python 3.11 --extra research --extra pdf   # Python 3.11/3.12 (not 3.14)
+cp .env.example .env        # set ANTHROPIC_API_KEY=... (or OPENAI_API_KEY=...)
+./scripts/run_local.sh      # http://127.0.0.1:5000
+```
 
-3. **Usage**:
-   - Select analysis model (Fast or Detailed)
-   - Fill in basic job details
-   - Paste the full job description
-   - Click "Analyze Job" and wait for results
+`run_local.sh` exports `.env` (nothing in the app reads `.env` by itself),
+applies Alembic migrations to `./data/joboffer.db`, binds to localhost only,
+and starts in **personal mode**: no sign-up, login, billing or quotas; you're
+the single local owner (`PERSONAL_MODE=0` runs the multi-user product).
+
+**Personal job search, in order:**
+1. **📝 CV & Profile → 📄 Master CV**: upload or paste your full CV (the
+   source of truth every tailored document is checked against).
+2. **👤 Search profile**: *Draft from my master CV*, then set target roles,
+   locations / remote region, salary floor, must-haves, dealbreakers, and a
+   **company watchlist** (auto-detects their Greenhouse / Lever / Ashby /
+   SmartRecruiters board).
+3. **🔭 Discover**: *Refresh feed* pulls your watchlist + Arbeitnow, Remotive,
+   RemoteOK, HN "Who is hiring" (and Adzuna with a free key), filters and
+   ranks against your profile, and has Claude Haiku score fit for you.
+   *Search the web with Claude* finds postings beyond those sources.
+4. **Deep analysis** on the promising ones: live, cited company and salary
+   research (Claude web search), a "Fit for You" section and a verdict that
+   respects your dealbreakers and floor, and an ATS match against your CV.
+5. Save to **📌 My Applications**, log stages, generate a tailored CV / cover
+   letter (review the "new facts" check), export PDF; **📊 Analytics** tracks
+   your funnel.
+
+**Full stack (Docker Compose):** `docker compose up --build` (web + worker +
+Redis + Postgres + scheduler). See `docs/ASSESSMENT.md` for the current
+state, known gaps, and the launch checklist.
 
 ## 📁 Project Structure
 

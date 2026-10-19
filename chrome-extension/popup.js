@@ -1,5 +1,5 @@
 // Popup controller. Relies on extract.js (loaded first) for the pure helpers.
-/* global chrome, extractJobText, buildAnalyzeRequest, renderVerdict */
+/* global chrome, extractJobText, buildAnalyzeRequest, renderVerdict, describeApiError */
 
 const $ = (id) => document.getElementById(id);
 
@@ -93,14 +93,16 @@ async function analyze() {
   const { url, options } = buildAnalyzeRequest(baseUrl, token, jobText);
   try {
     const resp = await fetch(url, options);
-    if (resp.status === 401) {
-      $("verdict").textContent = "";
-      $("error").textContent = "Token rejected (401). Check your API token.";
-      return;
-    }
     if (!resp.ok) {
       $("verdict").textContent = "";
-      $("error").textContent = `API error ${resp.status}.`;
+      let detail = null;
+      try {
+        const body = await resp.json();
+        detail = body && body.detail;
+      } catch (e) {
+        detail = null;
+      }
+      $("error").textContent = describeApiError(resp.status, detail);
       return;
     }
     const data = await resp.json();

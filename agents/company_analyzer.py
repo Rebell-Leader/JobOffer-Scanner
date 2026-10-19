@@ -27,7 +27,19 @@ def analyze(state: Dict) -> Dict:
             )
 
     if not company_name:
-        state["error"] = "Company analysis failed: company name missing from inputs and extraction."
+        # Recruiter / agency / stealth postings often don't name the employer.
+        # That's a property of the posting, not a failure: say so and let the
+        # rest of the pipeline (salary, resume fit, report) still run.
+        state["company_analysis"] = {
+            "stability_analysis": (
+                "COMPANY NOT IDENTIFIED: the posting does not name the employer "
+                "(common for recruiter or agency listings), so no company research "
+                "was done. Treat stability as unknown and ask the recruiter who "
+                "the client is before investing time."
+            ),
+        }
+        if progress_callback:
+            progress_callback("company", 100, "Employer not named in posting; skipped research")
         return state
 
     try:

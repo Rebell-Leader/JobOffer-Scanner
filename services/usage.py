@@ -44,7 +44,7 @@ import json
 import logging
 from contextvars import ContextVar
 from datetime import datetime, timedelta
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -59,12 +59,17 @@ logger = logging.getLogger(__name__)
 # override the whole table with LLM_PRICING_JSON='{"model": [in, out], ...}'.
 _DEFAULT_PRICING: Dict[str, Tuple[float, float]] = {
     # Anthropic
+    "claude-haiku-5-5": (0.0001, 0.0005),
+    "claude-sonnet-5-5": (0.002, 0.01),
+    "claude-opus-5-5": (0.004, 0.02),
     "claude-haiku-4-5-20251001": (0.001, 0.005),
     "claude-sonnet-4-6": (0.003, 0.015),
     # OpenAI
     "gpt-4o-mini": (0.00015, 0.0006),
     "gpt-4o": (0.0025, 0.01),
     "gpt-5": (0.00125, 0.01),
+    "gpt-5-mini": (0.00025, 0.002),
+    "gpt-5-nano": (0.00005, 0.0004),
     # Featherless / open models are flat-rate hosted; treat as ~free per-token.
     "Qwen/Qwen3-32B": (0.0, 0.0),
     "deepseek-ai/DeepSeek-R1-0528": (0.0, 0.0),
@@ -152,7 +157,8 @@ def record_completion(
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     total = int(usage.get("total_tokens") or (prompt + completion))
-    cost = estimate_cost_usd(model, prompt, completion)
+    # Per-call fees on top of tokens (e.g. Anthropic web search, $0.01/search).
+    cost = estimate_cost_usd(model, prompt, completion) + float(usage.get("extra_cost_usd") or 0)
     cost_micro = int(round(cost * 1_000_000))
     uid = user_id if user_id is not None else current_user()
 
@@ -201,6 +207,29 @@ def spend_usd(user_id: int, window_seconds: Optional[int] = None) -> float:
             )
         ).scalar_one()
     return (total_micro or 0) / 1_000_000.0
+
+
+def spend_by_model(user_id: int, window_seconds: int) -> List[dict]:
+    """Per-model calls / tokens / estimated USD over the window, priciest first."""
+    cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
+    with get_session() as session:
+        rows = session.execute(
+            select(
+                LlmUsage.model,
+                func.count(),
+                func.coalesce(func.sum(LlmUsage.prompt_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.completion_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.cost_micro_usd), 0),
+            )
+            .where(LlmUsage.user_id == user_id, LlmUsage.created_at >= cutoff)
+            .group_by(LlmUsage.model)
+        ).all()
+    out = [
+        {"model": model, "calls": calls, "input_tokens": int(inp), "output_tokens": int(outp),
+         "usd": int(micro) / 1_000_000.0}
+        for model, calls, inp, outp, micro in rows
+    ]
+    return sorted(out, key=lambda r: r["usd"], reverse=True)
 
 
 def check_budget(user_id: Optional[int]) -> None:

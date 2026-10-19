@@ -29,6 +29,8 @@ from db.models import (
     ApplicationStage,
 )
 from db.session import get_session
+from services._ownership import require_owned
+from services.applications import ApplicationError
 
 # Color hexes chosen to read on both light and dark Streamlit themes.
 # Pipeline stages: cooler -> warmer as the user advances; terminals stand out.
@@ -73,8 +75,12 @@ def per_application_timeline(user_id: int, application_id: int) -> List[Timeline
     sort to the bottom.
     """
     with get_session() as session:
-        app = session.get(Application, application_id)
-        if app is None or app.user_id != user_id:
+        try:
+            app = require_owned(
+                session, Application, application_id, user_id,
+                ApplicationError, "Application not found.",
+            )
+        except ApplicationError:
             return []
         label = _label(app)
         stages = session.execute(

@@ -93,13 +93,31 @@ class AuthLimitingTests(unittest.TestCase):
         os.environ["RL_RESET_MAX"] = "2"
         os.environ["RL_RESET_WINDOW"] = "60"
         # Re-import services.rate_limit so the env-driven defaults take effect,
-        # then rebuild the limiters in services.auth too.
-        for mod_name in ("services.rate_limit", "services.auth"):
+        # then rebuild the limiters in services.auth too. Reloading mints new
+        # exception classes, so anything that already imported the originals
+        # at module load time (bot/handlers.py, api/routes.py) would hold a
+        # stale class for the rest of the suite — save + restore in tearDown.
+        self._saved_modules = {
+            name: sys.modules.get(name)
+            for name in ("services.rate_limit", "services.auth")
+        }
+        for mod_name in self._saved_modules:
             sys.modules.pop(mod_name, None)
         _reset_rate_limit()
         _fresh_db()
         from services.auth import register_user  # noqa: F401 - re-imports below
         self._register = register_user
+
+    def tearDown(self):
+        for name in ("RL_LOGIN_MAX", "RL_LOGIN_WINDOW", "RL_REGISTER_MAX",
+                     "RL_REGISTER_WINDOW", "RL_RESET_MAX", "RL_RESET_WINDOW"):
+            os.environ.pop(name, None)
+        for name, mod in self._saved_modules.items():
+            if mod is not None:
+                sys.modules[name] = mod
+            else:
+                sys.modules.pop(name, None)
+        _reset_rate_limit()
 
     def test_login_blocks_after_max_failures(self):
         from services.auth import AuthError, authenticate_user
@@ -159,8 +177,28 @@ class AnalysisQuotaTests(unittest.TestCase):
         os.environ.pop("CELERY_BROKER_URL", None)
         os.environ["RL_ANALYSIS_MAX"] = "2"
         os.environ["RL_ANALYSIS_WINDOW"] = "60"
-        for mod_name in ("services.rate_limit", "services.analysis_runner"):
+        # Reloading these modules picks up the env vars above, but it also
+        # mints NEW exception classes (RateLimitExceeded et al.). Anything
+        # that already imported the originals at module load time (e.g.
+        # bot/handlers.py, api/routes.py) would then hold a stale class, so
+        # its `except RateLimitExceeded` stops matching for the rest of the
+        # suite. Save the pre-reload modules and put them back in tearDown.
+        self._saved_modules = {
+            name: sys.modules.get(name)
+            for name in ("services.rate_limit", "services.analysis_runner")
+        }
+        for mod_name in self._saved_modules:
             sys.modules.pop(mod_name, None)
+        _reset_rate_limit()
+
+    def tearDown(self):
+        os.environ.pop("RL_ANALYSIS_MAX", None)
+        os.environ.pop("RL_ANALYSIS_WINDOW", None)
+        for name, mod in self._saved_modules.items():
+            if mod is not None:
+                sys.modules[name] = mod
+            else:
+                sys.modules.pop(name, None)
         _reset_rate_limit()
 
     def test_quota_blocks_after_max(self):
@@ -193,6 +231,13 @@ class AnalysisQuotaTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class BotQueueRoutingTests(unittest.TestCase):
+
+    def setUp(self):
+        # These cover queue routing, not auth: run them as an opted-in
+        # private bot (unlinked chats are refused by default).
+        patcher = mock.patch.dict(os.environ, {"TELEGRAM_ALLOW_UNLINKED_ANALYZE": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
     def test_bot_uses_queue_when_async_enabled(self):
         from bot import handlers
 
@@ -232,7 +277,7 @@ class BotQueueRoutingTests(unittest.TestCase):
         }
 
         with mock.patch.object(handlers, "async_enabled", return_value=False), \
-             mock.patch.object(handlers, "run_analysis", return_value=fake_result), \
+             mock.patch.object(handlers, "run_analysis_sync", return_value=fake_result), \
              mock.patch.object(handlers, "enqueue_analysis") as enq:
             asyncio.run(handlers.handle_analyze(reply, "Company: Acme\nTitle: Eng"))
 
@@ -277,6 +322,81 @@ class BotQueueRoutingTests(unittest.TestCase):
             "ended in state FAILURE" in joined or "Analysis failed" in joined,
             msg=f"unexpected reply set: {sent!r}",
         )
+
+    def test_bot_enforces_quota_for_linked_chat(self):
+        # A chat linked to a web account must be metered exactly like the
+        # web UI/API — this used to be a total bypass (chat_id was never
+        # even threaded into the handler).
+        from bot import handlers
+        from services.rate_limit import RateLimitExceeded
+
+        sent = []
+
+        async def reply(text):
+            sent.append(text)
+
+        with mock.patch.object(handlers, "get_user_id_by_chat", return_value=7), \
+             mock.patch.object(handlers, "check_user_quota",
+                               side_effect=RateLimitExceeded(30)) as quota, \
+             mock.patch.object(handlers, "run_analysis_sync") as run_sync, \
+             mock.patch.object(handlers, "enqueue_analysis") as enq:
+            asyncio.run(
+                handlers.handle_analyze(reply, "Company: Acme\nTitle: Eng", chat_id=123)
+            )
+
+        quota.assert_called_once_with(7)
+        run_sync.assert_not_called()
+        enq.assert_not_called()
+        self.assertTrue(any("⚠️" in m for m in sent))
+
+    def test_bot_refuses_unlinked_chat_by_default(self):
+        # Anonymous /analyze spent the operator's key without any limit, and
+        # /unbind let a metered user escape their quota.
+        from bot import handlers
+
+        sent = []
+
+        async def reply(text):
+            sent.append(text)
+
+        env = {k: v for k, v in os.environ.items() if k != "TELEGRAM_ALLOW_UNLINKED_ANALYZE"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(handlers, "get_user_id_by_chat", return_value=None), \
+             mock.patch.object(handlers, "run_analysis_sync") as run_sync, \
+             mock.patch.object(handlers, "fetch_job_posting") as fetch:
+            asyncio.run(
+                handlers.handle_analyze(reply, "https://example.com/job", chat_id=999)
+            )
+
+        run_sync.assert_not_called()
+        fetch.assert_not_called()
+        self.assertTrue(any("/bind" in m for m in sent))
+
+    def test_unlinked_chat_allowed_when_opted_in(self):
+        from bot import handlers
+
+        sent = []
+
+        async def reply(text):
+            sent.append(text)
+
+        fake_result = {
+            "verdict": {"verdict": "Recommended", "light": "green", "reasons": []},
+            "job_details": {"extracted_details": {"company_name": "Acme"}},
+            "final_report": "# Report\n\nUnlinked.",
+        }
+
+        with mock.patch.dict(os.environ, {"TELEGRAM_ALLOW_UNLINKED_ANALYZE": "1"}), \
+             mock.patch.object(handlers, "get_user_id_by_chat", return_value=None), \
+             mock.patch.object(handlers, "check_user_quota") as quota, \
+             mock.patch.object(handlers, "async_enabled", return_value=False), \
+             mock.patch.object(handlers, "run_analysis_sync", return_value=fake_result):
+            asyncio.run(
+                handlers.handle_analyze(reply, "Company: Acme\nTitle: Eng", chat_id=999)
+            )
+
+        quota.assert_not_called()
+        self.assertIn("Unlinked.", "\n".join(sent))
 
 
 if __name__ == "__main__":

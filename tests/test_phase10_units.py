@@ -325,3 +325,62 @@ class TailoringIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Regression guards for holes that let embellished CVs pass as "clean"
+# ---------------------------------------------------------------------------
+
+_CV = (
+    "Alex Kim\nInitech — Software Engineer (2019-2024)\n"
+    "Skills: Python, Django, PostgreSQL, Docker\n"
+    "- Built billing APIs serving 2M users\n- Led migration to Kuber-\nnetes"
+)
+_POSTING = (
+    "Company: Globex\nTitle: Staff Engineer\nLocation: Berlin\n"
+    "Required technical skills: Python, Kubernetes, Go, AWS, Terraform"
+)
+_REFERENCE = "Company: Globex\nTitle: Staff Engineer\nLocation: Berlin"
+
+
+class EmbellishmentRegressionTests(unittest.TestCase):
+    def _cv_check(self, tailored):
+        from services.constraint_check import check_tailored_output
+        # A CV may not draw any fact from the job; the posting only labels flags.
+        return check_tailored_output(_CV, "", tailored, "", _POSTING)
+
+    def test_skills_copied_from_posting_are_flagged_and_labelled(self):
+        check = self._cv_check("## Skills\nPython, Django, Kubernetes, Go, AWS, Terraform")
+        self.assertFalse(check.is_clean)
+        self.assertEqual(sorted(check.from_posting), ["aws", "go", "terraform"])
+        # Kubernetes is in the CV (broken across a line by PDF extraction).
+        self.assertNotIn("kubernetes", check.new_proper_nouns)
+
+    def test_title_inflation_is_flagged(self):
+        self.assertIn("principal", self._cv_check("### Principal Engineer — Initech").new_proper_nouns)
+        self.assertIn("staff", self._cv_check("# Alex Kim — Staff Engineer").from_posting)
+
+    def test_dollar_amounts_and_counts_are_flagged(self):
+        check = self._cv_check("- Saved $2M; managed a team of 8; 7+ years of experience")
+        for claim in ("$2m", "team of 8", "7+ years"):
+            self.assertIn(claim, check.new_quantitative_claims)
+
+    def test_honest_prose_and_rephrasing_stay_clean(self):
+        from services.constraint_check import check_tailored_output
+
+        letter = (
+            "Dear Hiring Manager,\n\nI'm applying for the Staff Engineer role at Globex "
+            "in Berlin. Thank you for your time. Having led the Kubernetes migration at "
+            "Initech, I'd bring Python/Django depth.\n\nKind regards,\nAlex Kim"
+        )
+        self.assertTrue(check_tailored_output(_CV, "", letter, _REFERENCE, _POSTING).is_clean)
+        cv = (
+            "### Software Engineer — Initech (2019-2024)\n"
+            "- Led the Kubernetes migration\n- Built billing APIs serving 2M users"
+        )
+        self.assertTrue(self._cv_check(cv).is_clean)
+
+    def test_invented_employer_is_flagged(self):
+        check = self._cv_check("### Software Engineer — Hooli (2017-2019)")
+        self.assertIn("hooli", check.new_proper_nouns)
+        self.assertIn("2017", check.new_years)

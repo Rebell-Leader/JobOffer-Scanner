@@ -184,3 +184,79 @@ class ResumeStageOptionalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AtsMatchingRealismTests(unittest.TestCase):
+    """The LLM phrases requirements as "skill (detail)"; resumes use variants."""
+
+    def test_parenthetical_alternatives_and_aliases_match(self):
+        from tools.resume_tools import ats_keyword_match
+
+        resume = "Skills: Python, Postgres, K8s, AWS, Terraform, REST APIs. Built services in Golang."
+        required = [
+            "Containerization (Docker, Kubernetes)", "PostgreSQL",
+            "Cloud Platforms (AWS/GCP preferred)", "Infrastructure as Code (Terraform)",
+            "RESTful APIs", "Go",
+        ]
+        result = ats_keyword_match(resume, required)
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["score"], 100)
+
+    def test_ambiguous_short_names_need_capitalized_mentions(self):
+        from tools.resume_tools import ats_keyword_match
+
+        result = ats_keyword_match("I go hiking and lead R&D.", ["Go", "R"])
+        self.assertEqual(result["matched"], [])
+        self.assertEqual(ats_keyword_match("Wrote Go services.", ["Go"])["score"], 100)
+
+    def test_icon_glyph_warning_only_when_present(self):
+        from tools.resume_tools import ats_format_checks
+
+        plain = "word " * 200
+        self.assertFalse(any("glyph" in i for i in ats_format_checks(plain)))
+        self.assertTrue(any("glyph" in i for i in ats_format_checks(plain + " item")))
+
+
+class JsonLdJobPostingTests(unittest.TestCase):
+    """ATS pages (Greenhouse, Lever, Ashby, Workday...) embed the full posting
+    as schema.org JSON-LD; the DOM path used to discard it with the scripts."""
+
+    def test_jsonld_job_posting_preferred_over_dom(self):
+        import json
+
+        from tools.html_extract import extract_job_text
+
+        posting = {
+            "@context": "https://schema.org", "@type": "JobPosting",
+            "title": "Senior Platform Engineer",
+            "hiringOrganization": {"@type": "Organization", "name": "Globex"},
+            "jobLocation": {"@type": "Place", "address": {
+                "addressLocality": "Berlin", "addressCountry": "DE"}},
+            "employmentType": "FULL_TIME",
+            "baseSalary": {"currency": "EUR", "value": {
+                "minValue": 85000, "maxValue": 105000, "unitText": "YEAR"}},
+            "description": "&lt;p&gt;" + "Own our Kubernetes platform. " * 12 + "&lt;/p&gt;",
+        }
+        html = (
+            "<html><head><script type='application/ld+json'>"
+            + json.dumps(posting)
+            + "</script></head><body><div class='job-header'>Senior Platform Engineer"
+            "</div><div class='cookie-content'>We use cookies</div></body></html>"
+        )
+        text = extract_job_text(html)
+        self.assertIn("Company: Globex", text)
+        self.assertIn("Location: Berlin, DE", text)
+        self.assertIn("Compensation: EUR 85000-105000 per year", text)
+        self.assertIn("Own our Kubernetes platform.", text)
+        self.assertNotIn("<p>", text)
+        self.assertNotIn("cookies", text)
+
+    def test_longest_content_container_wins(self):
+        from tools.html_extract import extract_job_text
+
+        html = (
+            "<html><body><div class='cookie-content'>We use cookies</div>"
+            "<div class='job-description'>" + "Build data pipelines in Python. " * 10
+            + "</div></body></html>"
+        )
+        self.assertIn("Build data pipelines", extract_job_text(html))

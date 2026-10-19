@@ -30,6 +30,7 @@ def analyze(state: Dict) -> Dict:
             location=location,
             experience_level=experience_level,
             model=model,
+            posted_compensation=manual.get("compensation") or extracted.get("compensation"),
         )
         state["salary_analysis"] = {"estimated_range": salary_report}
         if progress_callback:

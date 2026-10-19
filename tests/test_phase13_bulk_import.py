@@ -305,3 +305,12 @@ class ApplicationFreeformAndSaveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CsvImportRealWorldTests(unittest.TestCase):
+    def test_bom_header_case_and_status_case(self):
+        from services.bulk_import import parse_applications_csv
+
+        csv_text = "﻿Company Name,Job Title,Status\nAcme,Eng,Rejected\nGlobex,PM,ghosted\nInitech,SRE,Interview\n"
+        rows = parse_applications_csv(csv_text)
+        self.assertEqual([r["status"] for r in rows], ["rejected", "rejected", "interviewing"])

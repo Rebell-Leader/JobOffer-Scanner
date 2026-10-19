@@ -262,7 +262,9 @@ class AppRenderSmokeTests(unittest.TestCase):
             # Pop expanders we've dedented out of.
             while expander_stack and indent <= expander_stack[-1]:
                 expander_stack.pop()
-            if stripped.startswith("with st.expander("):
+            # st.sidebar.expander counts too — the 2FA setup crash shipped
+            # because this scan only looked for st.expander.
+            if stripped.startswith(("with st.expander(", "with st.sidebar.expander(")):
                 if expander_stack:
                     max_depth = max(max_depth, len(expander_stack) + 1)
                 expander_stack.append(indent)

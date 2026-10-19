@@ -21,13 +21,17 @@ def analyze(state: Dict) -> Dict:
 
     job_details = state.get("job_details") or {}
     requirements = job_details.get("requirements_analysis") or {}
+    # Score against both lists: the posting's tools ("Terraform", "Datadog")
+    # used to be ignored whenever any technical skill was extracted.
     required_skills: list = []
     if isinstance(requirements, dict):
-        required_skills = (
-            requirements.get("technical_skills")
-            or requirements.get("tools_and_technologies")
-            or []
-        )
+        seen = set()
+        for skill in (requirements.get("technical_skills") or []) + (
+            requirements.get("tools_and_technologies") or []
+        ):
+            if isinstance(skill, str) and skill.strip().lower() not in seen:
+                seen.add(skill.strip().lower())
+                required_skills.append(skill)
 
     try:
         state["resume_analysis"] = analyze_resume(

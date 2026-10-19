@@ -10,12 +10,15 @@ def analyze(state: Dict) -> Dict:
     progress_callback = state.get("progress_callback")
 
     try:
-        # Use manual inputs as the source-of-truth for the basics when provided.
-        # Still run requirements extraction on the description for skill detail.
-        if isinstance(manual_inputs, dict) and manual_inputs.get("company_name"):
-            extracted = dict(manual_inputs)
-        else:
-            extracted = extract_job_details(job_posting, model)
+        # Always extract from the posting, then let any non-empty manual field
+        # override the extracted value. (Skipping extraction whenever a company
+        # name was typed used to drop location, seniority, skills and
+        # responsibilities from the report.) Copy: the extraction is cached.
+        extracted = dict(extract_job_details(job_posting, model))
+        if isinstance(manual_inputs, dict):
+            for key, value in manual_inputs.items():
+                if value.strip() if isinstance(value, str) else value:
+                    extracted[key] = value
 
         requirements = analyze_requirements(job_posting, model)
         state["job_details"] = {

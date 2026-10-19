@@ -30,6 +30,8 @@ target_metadata = Base.metadata
 def _database_url() -> str:
     url = os.getenv("DATABASE_URL")
     if url:
+        if url.startswith("postgres://"):  # same normalization as db.session
+            url = "postgresql://" + url[len("postgres://"):]
         return url
     sqlite_path = Path(os.getenv("SQLITE_PATH", "./data/joboffer.db"))
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)

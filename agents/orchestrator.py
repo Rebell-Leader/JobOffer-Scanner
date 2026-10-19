@@ -2,8 +2,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Optional, TypedDict
 
-from langgraph.graph import StateGraph
-
 from agents import (
     company_analyzer,
     job_analyzer,
@@ -36,6 +34,7 @@ class JobAnalysisState(TypedDict, total=False):
     model: Optional[str]
     progress_callback: Optional[Callable]
     checkpoint_key: Optional[str]
+    profile_text: Optional[str]
 
 
 # ---------------------------------------------------------------------------
@@ -179,19 +178,23 @@ def _generate_report_with_checkpoint(state: Dict) -> Dict:
     return state
 
 
-def create_analysis_graph():
-    workflow = StateGraph(JobAnalysisState)
-    workflow.add_node("analyze_job", _analyze_job_with_checkpoint)
-    workflow.add_node("analyze_company_and_salary", _analyze_company_and_salary)
-    workflow.add_node("analyze_resume", _analyze_resume_with_checkpoint)
-    workflow.add_node("generate_report", _generate_report_with_checkpoint)
+# The pipeline is a fixed sequence (company and salary run in parallel inside
+# their stage). Each stage takes and returns the shared state and is a no-op
+# once an earlier stage set ``error``. (This was a LangGraph StateGraph with
+# only linear edges and its own checkpointing: the dependency added ~200 ms
+# of import time and no capability.)
+_PIPELINE = (
+    _analyze_job_with_checkpoint,
+    _analyze_company_and_salary,
+    _analyze_resume_with_checkpoint,
+    _generate_report_with_checkpoint,
+)
 
-    workflow.add_edge("analyze_job", "analyze_company_and_salary")
-    workflow.add_edge("analyze_company_and_salary", "analyze_resume")
-    workflow.add_edge("analyze_resume", "generate_report")
 
-    workflow.set_entry_point("analyze_job")
-    return workflow.compile()
+def _run_pipeline(state: Dict) -> Dict:
+    for stage in _PIPELINE:
+        state = stage(state)
+    return state
 
 
 def run_analysis(
@@ -201,8 +204,13 @@ def run_analysis(
     progress_callback: Optional[Callable] = None,
     resume_text: Optional[str] = None,
     checkpoint_key: Optional[str] = None,
+    profile_text: Optional[str] = None,
 ) -> dict:
     """Run the analysis pipeline.
+
+    ``profile_text`` (the candidate's search profile, see services/profile)
+    personalises the report: a "Fit for You" section and a verdict that
+    weighs dealbreakers and the salary floor.
 
     ``checkpoint_key`` opt-in: when present, completed stages are read from
     (and new completions written to) the in-process checkpoint store. A retry
@@ -210,8 +218,6 @@ def run_analysis(
     On a successful end-to-end run the caller should clear the checkpoint
     (the UI does this after rendering the result).
     """
-    graph = create_analysis_graph()
-
     initial_state: JobAnalysisState = {
         "job_posting": job_posting,
         "job_details": {},
@@ -226,13 +232,14 @@ def run_analysis(
         "model": model,
         "progress_callback": progress_callback,
         "checkpoint_key": checkpoint_key,
+        "profile_text": profile_text or "",
     }
 
     if progress_callback:
         progress_callback("job", 25)
 
     try:
-        return graph.invoke(initial_state)
+        return _run_pipeline(dict(initial_state))
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller
         return {
             **initial_state,

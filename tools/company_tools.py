@@ -15,11 +15,6 @@ from __future__ import annotations
 
 import logging
 
-try:
-    from langchain_core.tools import Tool  # langchain >= 0.3
-except ImportError:  # pragma: no cover - older langchain layout
-    from langchain.tools import Tool  # type: ignore[attr-defined,no-redef]
-
 from tools.data_sources import fetch_company_news, fetch_layoffs
 from utils.cache import cache
 from utils.llm import get_completion
@@ -125,17 +120,3 @@ Every paragraph that is an inference must start with "Inference:".
     response = get_completion(prompt, model)
     cache.set(cache_key, response)
     return response
-
-
-company_tools = [
-    Tool(
-        name="analyze_company_stability",
-        func=analyze_company_stability,
-        description="Analyzes company stability and growth prospects",
-    ),
-    Tool(
-        name="analyze_culture_signals",
-        func=analyze_culture_signals,
-        description="Inferred culture briefing (not real reviews)",
-    ),
-]

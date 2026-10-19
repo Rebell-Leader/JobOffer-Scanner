@@ -35,7 +35,6 @@ from db.models import (
 )
 from db.session import get_session
 from services._ownership import require_owned
-from services.telegram_link import send_to_chat
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +54,14 @@ class StaleApplication:
 # ---------------------------------------------------------------------------
 # Detection — pure read, no notification side-effects
 # ---------------------------------------------------------------------------
+
+def send_to_chat(chat_id: int, text: str) -> bool:
+    """Telegram delivery, imported on first use: the stale / snooze logic is
+    core (personal mode uses it), Telegram is a side feature."""
+    from services.telegram_link import send_to_chat as _send
+
+    return _send(chat_id, text)
+
 
 def find_stale_applications(
     user_id: int,

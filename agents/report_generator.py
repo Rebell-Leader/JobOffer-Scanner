@@ -2,6 +2,7 @@ import json
 from typing import Dict
 
 from utils.llm import get_completion
+from utils.security import wrap_untrusted
 from utils.verdict import extract_verdict, strip_verdict_block
 
 
@@ -27,12 +28,12 @@ def generate(state: Dict) -> Dict:
 
     job_details_str = "\n".join(
         [
-            f"- **Company:** {extracted.get('company_name', 'Not specified')}",
-            f"- **Position:** {extracted.get('job_title', 'Not specified')}",
-            f"- **Location:** {extracted.get('location', 'Not specified')}",
-            f"- **Experience Required:** {extracted.get('experience_level', 'Not specified')}",
-            f"- **Job Type:** {extracted.get('job_type', 'Not specified')}",
-            f"- **Compensation:** {extracted.get('compensation', 'Not specified')}",
+            f"- **Company:** {extracted.get('company_name') or 'Not specified'}",
+            f"- **Position:** {extracted.get('job_title') or 'Not specified'}",
+            f"- **Location:** {extracted.get('location') or 'Not specified'}",
+            f"- **Experience Required:** {extracted.get('experience_level') or 'Not specified'}",
+            f"- **Job Type:** {extracted.get('job_type') or 'Not specified'}",
+            f"- **Compensation:** {extracted.get('compensation') or 'Not specified'}",
         ]
     )
 
@@ -50,14 +51,38 @@ Resume gap commentary:
 {resume_analysis.get('commentary', '')}
 """
 
+    profile_text = (state.get("profile_text") or "").strip()
+    profile_section = (
+        f"""
+## Candidate Profile (what THIS candidate wants; written by them)
+{profile_text}
+"""
+        if profile_text else ""
+    )
+    fit_section = (
+        """   Then, before section 2, a **Fit for You** section judging the posting
+   against the Candidate Profile:
+   role and seniority match; location, remote region and work authorization;
+   salary vs. their minimum (give the numbers, or say compensation is
+   unstated); must-haves met or unmet; and end with "Dealbreakers hit:" followed
+   by the list or "none".
+"""
+        if profile_text else ""
+    )
+    verdict_rule = (
+        "- The recommendation is for THIS candidate: a dealbreaker hit, or salary\n"
+        "  clearly below their minimum, caps it at `Consider with Caution` or lower.\n"
+        if profile_text else ""
+    )
+
     prompt = f"""
 Generate a comprehensive job analysis report from the data below.
+{profile_section}
+## Job Details (extracted from the posting)
+{wrap_untrusted(job_details_str, "job_details")}
 
-## Job Details
-{job_details_str}
-
-## Requirements Analysis
-{json.dumps(requirements, indent=2)}
+## Requirements Analysis (extracted from the posting)
+{wrap_untrusted(json.dumps(requirements, indent=2), "requirements")}
 
 ## Company Analysis
 {json.dumps(company_analysis, indent=2)}
@@ -68,7 +93,7 @@ Generate a comprehensive job analysis report from the data below.
 
 Structure your markdown report with these sections:
 1. **Executive Summary** — position, key findings, headline verdict.
-2. **Company Profile** — stability, market position, culture signals. Repeat any
+{fit_section}2. **Company Profile** — stability, market position, culture signals. Repeat any
    data caveats from the inputs (e.g. "layoffs data not available", "salary
    figures are estimates"). Do NOT pretend you have data you weren't given.
 3. **Job Requirements Analysis** — required skills/experience and how
@@ -88,7 +113,7 @@ with no surrounding prose, in EXACTLY this format:
 </verdict_json>
 
 Rules:
-- Do not output `<think>` blocks or markdown code fences around the whole report.
+{verdict_rule}- Do not output `<think>` blocks or markdown code fences around the whole report.
 - Do not fabricate company news, layoffs, or salary benchmarks.
 - The verdict in the JSON block MUST match the one in the markdown.
 """

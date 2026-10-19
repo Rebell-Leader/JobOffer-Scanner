@@ -63,8 +63,16 @@ def get_missing_configs() -> List[str]:
     return missing
 
 
+_status_printed = False
+
+
 def print_environment_status():
-    """Print current environment configuration status to the console."""
+    """Print current environment configuration status to the console, once
+    per process (Streamlit re-executes app.py on every interaction)."""
+    global _status_printed
+    if _status_printed:
+        return
+    _status_printed = True
     print("\n" + "=" * 50)
     print("AI JOB ANALYSIS PLATFORM - ENVIRONMENT STATUS")
     print("=" * 50)

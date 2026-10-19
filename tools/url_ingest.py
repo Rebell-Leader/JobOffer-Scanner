@@ -21,7 +21,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from typing import Optional
+from urllib.parse import urljoin
 
 import requests
 
@@ -96,25 +98,17 @@ def fetch_job_posting(url: str) -> str:
             "paste the job description text instead."
         )
 
+    resp = _get_following_safe_redirects(url)
     try:
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,*/*"},
-            timeout=_HTTP_TIMEOUT,
-            stream=True,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        raise ValueError(f"Failed to fetch {url}: {exc}") from exc
-
-    content_type = resp.headers.get("content-type", "")
-    if "html" not in content_type.lower():
-        raise ValueError(
-            f"Expected HTML at {url}, got Content-Type={content_type!r}. "
-            "Paste the job description text instead."
-        )
-
-    body = resp.content[:_MAX_BYTES]
+        content_type = resp.headers.get("content-type", "")
+        if "html" not in content_type.lower():
+            raise ValueError(
+                f"Expected HTML at {url}, got Content-Type={content_type!r}. "
+                "Paste the job description text instead."
+            )
+        body = _read_capped(resp)
+    finally:
+        resp.close()
     text = _clean_html(body)
     if len(text) < 200:
         # Likely a JS-rendered shell. Try a headless browser if enabled.
@@ -128,6 +122,57 @@ def fetch_job_posting(url: str) -> str:
             "the job description text instead."
         )
     return text
+
+
+_MAX_REDIRECTS = 5
+
+
+def _get_following_safe_redirects(url: str) -> requests.Response:
+    """GET ``url``, following redirects one hop at a time.
+
+    ``requests`` follows redirects on its own by default, so a public URL that
+    302s to 169.254.169.254 or localhost used to pass the SSRF check. Every
+    hop is now re-validated with the same policy as the original URL.
+    """
+    from utils.security import check_url_allowed
+
+    for _ in range(_MAX_REDIRECTS + 1):
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": _USER_AGENT, "Accept": "text/html,*/*"},
+                timeout=_HTTP_TIMEOUT,
+                stream=True,
+                allow_redirects=False,
+            )
+            if not resp.is_redirect:
+                resp.raise_for_status()
+                return resp
+        except requests.RequestException as exc:
+            raise ValueError(f"Failed to fetch {url}: {exc}") from exc
+        location = resp.headers.get("location", "")
+        resp.close()
+        url = urljoin(url, location)
+        ok, reason = check_url_allowed(url)
+        if not ok:
+            raise ValueError(f"Redirect blocked: {reason}")
+    raise ValueError(f"Too many redirects fetching {url}.")
+
+
+def _read_capped(resp: requests.Response) -> bytes:
+    """Read at most _MAX_BYTES within an overall deadline.
+
+    ``resp.content[:N]`` downloads the whole body before slicing, and the
+    per-read timeout never ends a slow, endless stream.
+    """
+    deadline = time.monotonic() + _HTTP_TIMEOUT * 2
+    chunks, size = [], 0
+    for chunk in resp.iter_content(chunk_size=65536):
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= _MAX_BYTES or time.monotonic() > deadline:
+            break
+    return b"".join(chunks)[:_MAX_BYTES]
 
 
 def _try_browser_fallback(url: str) -> Optional[str]:

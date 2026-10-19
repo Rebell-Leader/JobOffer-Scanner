@@ -77,7 +77,8 @@ def main() -> int:
             return
         raw = update.message.text or ""
         _, _, args = raw.partition(" ")
-        await handle_analyze(_reply_for(update.message), args=args)
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        await handle_analyze(_reply_for(update.message), args=args, chat_id=chat_id)
 
     async def _bind(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None or update.effective_chat is None:

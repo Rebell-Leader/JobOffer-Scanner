@@ -16,8 +16,6 @@ dependencies = [
     "cryptography>=41.0.0",
     "fastapi>=0.110.0",
     "fpdf2>=2.8.7",
-    "langchain>=0.3.19",
-    "langgraph>=0.3.1",
     "openai>=1.65.1",
     "pandas>=2.2.3",
     "psycopg2-binary>=2.9.12",
@@ -85,7 +83,7 @@ warn_unused_ignores = false
 check_untyped_defs = false
 # Scope: the app packages we actively maintain types for. Tests + migrations
 # are intentionally excluded (heavy mocking / generated code).
-files = ["services", "utils", "db", "tools", "agents", "api", "bot", "worker"]
+files = ["services", "utils", "db", "tools", "agents", "api", "bot", "worker", "ui"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "migrations", ".venv"]

@@ -1,9 +1,10 @@
-import os
+import html
 from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
 from agents.orchestrator import run_analysis
 from db.models import APPLICATION_STATUSES, PIPELINE_STAGES
@@ -18,22 +19,6 @@ from services.applications import (
     list_applications,
     save_analysis,
     update_status,
-)
-from services.auth import (
-    AuthError,
-    authenticate_user,
-    change_password,
-    complete_password_reset,
-    register_user,
-    request_password_reset,
-)
-from services.background_analysis import (
-    BackgroundAnalysisError,
-    refresh_all_pending,
-    submit_background_analysis,
-)
-from services.background_analysis import (
-    delete as delete_background_analysis,
 )
 from services.billing import TierLimitExceeded as BillingTierError
 from services.bulk_import import (
@@ -65,11 +50,8 @@ from services.master_cv import (
     save_master_cv,
     save_master_cv_from_upload,
 )
-from services.notifications import (
-    notify_stage_added,
-    send_password_reset_email,
-)
 from services.pdf_export import PDFExportError, markdown_to_pdf
+from services.personal import ensure_local_owner
 from services.projects import (
     ProjectError,
     create_project,
@@ -103,58 +85,92 @@ from services.tailoring import (
     list_artifacts,
     recheck_artifact,
 )
-from services.telegram_link import (
-    TelegramLinkError,
-    get_link,
-    issue_binding_token,
-    set_notify_on_stage,
-    unlink,
-)
 from services.timeline import (
     STAGE_COLORS,
     cross_application_swimlane,
     per_application_timeline,
     points_to_records,
 )
-from services.totp import (
-    TOTPError,
-)
-from services.totp import (
-    confirm_setup as totp_confirm_setup,
-)
-from services.totp import (
-    disable as totp_disable,
-)
-from services.totp import (
-    is_enabled as totp_is_enabled,
-)
-from services.totp import (
-    remaining_backup_codes as totp_backup_codes_left,
-)
-from services.totp import (
-    start_setup as totp_start_setup,
-)
-from services.totp import (
-    verify_login as totp_verify_login,
-)
-from services.webhooks import (
-    WebhookError,
-    delete_webhook,
-    list_webhooks,
-    register_webhook,
-)
-from services.webhooks import (
-    list_deliveries as list_webhook_deliveries,
-)
-from services.webhooks import (
-    set_active as set_webhook_active,
-)
+from services.usage import BudgetExceeded
 from tools.resume_tools import extract_resume_text
 from tools.url_ingest import fetch_job_posting, is_url
+from ui.discover import render_discover_tab
+from ui.personal import render_personal_sidebar
+from ui.profile import render_profile_editor
 from utils.config import check_environment_setup, print_environment_status
 from utils.diff import inline_diff_html, unified_diff
-from utils.env import env_bool
+from utils.env import env_bool, env_str
+from utils.features import enabled as feature_enabled
+from utils.features import personal_mode
 from utils.logging_setup import configure as configure_logging
+
+# Personal mode (PERSONAL_MODE=1): one local owner, core features only. The
+# hosted product's side features (accounts, 2FA, background jobs, webhooks,
+# Telegram, notifications) are imported only when they can run; see
+# utils/features.py.
+PERSONAL_MODE = personal_mode()
+
+if not PERSONAL_MODE:
+    from services.auth import (
+        AuthError,
+        authenticate_user,
+        change_password,
+        complete_password_reset,
+        register_user,
+        request_password_reset,
+    )
+    from services.background_analysis import (
+        BackgroundAnalysisError,
+        refresh_all_pending,
+        submit_background_analysis,
+    )
+    from services.background_analysis import (
+        delete as delete_background_analysis,
+    )
+    from services.notifications import (
+        notify_stage_added,
+        send_password_reset_email,
+    )
+    from services.telegram_link import (
+        TelegramLinkError,
+        get_link,
+        issue_binding_token,
+        set_notify_on_stage,
+        unlink,
+    )
+    from services.totp import (
+        TOTPError,
+    )
+    from services.totp import (
+        confirm_setup as totp_confirm_setup,
+    )
+    from services.totp import (
+        disable as totp_disable,
+    )
+    from services.totp import (
+        is_enabled as totp_is_enabled,
+    )
+    from services.totp import (
+        remaining_backup_codes as totp_backup_codes_left,
+    )
+    from services.totp import (
+        start_setup as totp_start_setup,
+    )
+    from services.totp import (
+        verify_login as totp_verify_login,
+    )
+    from services.webhooks import (
+        WebhookError,
+        delete_webhook,
+        list_webhooks,
+        register_webhook,
+    )
+    from services.webhooks import (
+        list_deliveries as list_webhook_deliveries,
+    )
+    from services.webhooks import (
+        set_active as set_webhook_active,
+    )
 
 # Activation: a realistic sample posting new users can analyze in one click,
 # and a polished static verdict shown to anonymous visitors before signup.
@@ -197,7 +213,7 @@ init_db()
 # ---------------------------------------------------------------------------
 
 share_token = st.query_params.get("share")
-if share_token:
+if share_token and feature_enabled("sharing"):
     from services.sharing import ShareError, get_view
 
     st.title("📄 Shared job analysis")
@@ -492,8 +508,12 @@ def render_auth() -> None:
 
 
 if "user_id" not in st.session_state:
-    render_auth()
-    st.stop()
+    if PERSONAL_MODE:
+        # Single local owner: no sign-up, login, 2FA or billing screens.
+        st.session_state.user_id, st.session_state.user_email = ensure_local_owner()
+    else:
+        render_auth()
+        st.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -561,382 +581,391 @@ if _vt:
         st.error(str(exc))
     st.query_params.pop("verify_token", None)
 
-_render_verification_gate()
+if not PERSONAL_MODE:
+    _render_verification_gate()
 
 
 # ---------------------------------------------------------------------------
 # Authenticated layout
 # ---------------------------------------------------------------------------
 
-st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
+if PERSONAL_MODE:
+    render_personal_sidebar(st.session_state.user_id)
+else:
+    st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
 
-with st.sidebar.expander("💳 Plan & usage"):
-    from services.billing import (
-        BillingError,
-        create_checkout_session,
-        create_portal_session,
-        plan_summary,
-    )
-    _plan = plan_summary(st.session_state.user_id)
-    if not _plan["billing_enabled"]:
-        st.caption("Self-hosted deployment — no plan limits.")
-    else:
-        st.markdown(f"**{_plan['label']} plan**")
-        _an_lim = _plan["analyses_limit"]
-        _ar_lim = _plan["artifacts_limit"]
-        st.caption(
-            f"Analyses: {_plan['analyses_used']}"
-            + (f" / {_an_lim}" if _an_lim >= 0 else " (unlimited)")
-            + f" · Tailored docs: {_plan['artifacts_used']}"
-            + (f" / {_ar_lim}" if _ar_lim >= 0 else " (unlimited)")
-            + f" · per {_plan['window_days']} days"
+if not PERSONAL_MODE:
+
+    with st.sidebar.expander("💳 Plan & usage"):
+        from services.billing import (
+            BillingError,
+            create_checkout_session,
+            create_portal_session,
+            plan_summary,
         )
-        if _plan["tier"] == "free":
-            _up_col1, _up_col2 = st.columns(2)
-            with _up_col1:
-                if st.button("Upgrade to Pro", key="upgrade_pro"):
-                    try:
-                        _url = create_checkout_session(
-                            st.session_state.user_id, "pro",
-                            user_email=st.session_state.user_email,
-                        )
-                        st.session_state["checkout_url"] = _url
-                    except BillingError as exc:
-                        st.error(str(exc))
-            with _up_col2:
-                if st.button("Upgrade to Power", key="upgrade_power"):
-                    try:
-                        _url = create_checkout_session(
-                            st.session_state.user_id, "power",
-                            user_email=st.session_state.user_email,
-                        )
-                        st.session_state["checkout_url"] = _url
-                    except BillingError as exc:
-                        st.error(str(exc))
-            if st.session_state.get("checkout_url"):
-                st.link_button("→ Complete checkout", st.session_state["checkout_url"])
+        _plan = plan_summary(st.session_state.user_id)
+        if not _plan["billing_enabled"]:
+            st.caption("Self-hosted deployment — no plan limits.")
         else:
-            if st.button("Manage billing", key="billing_portal"):
-                try:
-                    st.session_state["portal_url"] = create_portal_session(
-                        st.session_state.user_id
-                    )
-                except BillingError as exc:
-                    st.error(str(exc))
-            if st.session_state.get("portal_url"):
-                st.link_button("→ Open billing portal", st.session_state["portal_url"])
-
-with st.sidebar.expander("📜 My recent activity"):
-    from services.audit import list_for_user as _list_audit
-    events = _list_audit(st.session_state.user_id, limit=20)
-    if not events:
-        st.caption("_No recorded activity yet._")
-    else:
-        for ev in events:
+            st.markdown(f"**{_plan['label']} plan**")
+            _an_lim = _plan["analyses_limit"]
+            _ar_lim = _plan["artifacts_limit"]
             st.caption(
-                f"`{ev.created_at.strftime('%Y-%m-%d %H:%M')}` — `{ev.kind}`"
+                f"Analyses: {_plan['analyses_used']}"
+                + (f" / {_an_lim}" if _an_lim >= 0 else " (unlimited)")
+                + f" · Tailored docs: {_plan['artifacts_used']}"
+                + (f" / {_ar_lim}" if _ar_lim >= 0 else " (unlimited)")
+                + f" · per {_plan['window_days']} days"
             )
-
-with st.sidebar.expander("🔑 API tokens"):
-    from services.api_tokens import (
-        ApiTokenError,
-    )
-    from services.api_tokens import (
-        issue as issue_api_token,
-    )
-    from services.api_tokens import (
-        list_for_user as list_api_tokens,
-    )
-    from services.api_tokens import (
-        revoke as revoke_api_token,
-    )
-    st.caption(
-        "Long-lived bearer tokens for the REST API "
-        "(`/v1/analyze`, `/v1/applications`, etc.). "
-        "Shown ONCE on creation — save it somewhere safe."
-    )
-    with st.form("new_api_token_form"):
-        col_n, col_t = st.columns(2)
-        with col_n:
-            api_name = st.text_input("Token name", placeholder="e.g. cli-laptop")
-        with col_t:
-            api_ttl = st.selectbox(
-                "Expiry", ["30 days", "90 days", "365 days", "Never"],
-            )
-        if st.form_submit_button("Create token", type="primary"):
-            try:
-                ttl_days = None if api_ttl == "Never" else int(api_ttl.split()[0])
-                issued = issue_api_token(
-                    st.session_state.user_id, api_name, ttl_days=ttl_days,
-                )
-                st.session_state["new_api_token_value"] = issued.raw_token
-                st.rerun()
-            except ApiTokenError as exc:
-                st.error(str(exc))
-
-    if st.session_state.get("new_api_token_value"):
-        st.warning(
-            "Copy this token NOW. You will not see it again — only the "
-            "8-char prefix remains in the list below."
-        )
-        st.code(st.session_state["new_api_token_value"], language=None)
-        if st.button("I've copied it"):
-            st.session_state.pop("new_api_token_value", None)
-            st.rerun()
-
-    tokens = list_api_tokens(st.session_state.user_id)
-    if tokens:
-        st.markdown("**Existing tokens**")
-        for t in tokens:
-            status = (
-                "revoked" if t.revoked_at else
-                "expired" if t.expires_at and t.expires_at <= datetime.utcnow() else
-                "active"
-            )
-            cols = st.columns([4, 1])
-            with cols[0]:
-                st.caption(
-                    f"`{t.prefix}…` · **{t.name}** · _{status}_"
-                    + (f" · last used {t.last_used_at.strftime('%Y-%m-%d')}"
-                       if t.last_used_at else "")
-                )
-            with cols[1]:
-                if status == "active":
-                    if st.button("Revoke", key=f"api_revoke_{t.id}"):
+            if _plan["tier"] == "free":
+                _up_col1, _up_col2 = st.columns(2)
+                with _up_col1:
+                    if st.button("Upgrade to Pro", key="upgrade_pro"):
                         try:
-                            revoke_api_token(st.session_state.user_id, t.id)
-                            st.rerun()
-                        except ApiTokenError as exc:
+                            _url = create_checkout_session(
+                                st.session_state.user_id, "pro",
+                                user_email=st.session_state.user_email,
+                            )
+                            st.session_state["checkout_url"] = _url
+                        except BillingError as exc:
                             st.error(str(exc))
-
-with st.sidebar.expander("🪝 Webhooks"):
-    from db.models import WEBHOOK_EVENTS
-    st.caption(
-        "POST a signed JSON payload to your URL when events fire. Each "
-        "request carries an `X-JobOffer-Signature: sha256=…` HMAC header "
-        "computed with the webhook secret."
-    )
-    with st.form("new_webhook_form"):
-        wh_url = st.text_input("Endpoint URL", placeholder="https://example.com/hook")
-        wh_events = st.multiselect("Events", list(WEBHOOK_EVENTS), default=["stage.added"])
-        if st.form_submit_button("Add webhook", type="primary"):
-            try:
-                wh = register_webhook(st.session_state.user_id, wh_url, wh_events)
-                st.success("Webhook created. Secret (verify signatures with this):")
-                st.code(wh.secret, language=None)
-            except WebhookError as exc:
-                st.error(str(exc))
-
-    hooks = list_webhooks(st.session_state.user_id)
-    if hooks:
-        st.markdown("**Configured webhooks**")
-        for wh in hooks:
-            state = "active" if wh.active else "paused"
-            cols = st.columns([4, 1])
-            with cols[0]:
-                st.caption(f"#{wh.id} · _{state}_ · {', '.join(wh.events)}")
-                st.caption(wh.url)
-            with cols[1]:
-                if st.button("Pause" if wh.active else "Resume", key=f"wh_toggle_{wh.id}"):
-                    set_webhook_active(st.session_state.user_id, wh.id, not wh.active)
-                    st.rerun()
-                if st.button("🗑️", key=f"wh_del_{wh.id}"):
-                    delete_webhook(st.session_state.user_id, wh.id)
-                    st.rerun()
-
-        deliveries = list_webhook_deliveries(st.session_state.user_id, limit=8)
-        if deliveries:
-            st.markdown("**Recent deliveries**")
-            for d in deliveries:
-                icon = "✅" if d.success else "❌"
-                code = d.status_code if d.status_code is not None else "—"
-                st.caption(f"{icon} `{d.event}` → HTTP {code} ({d.attempts} attempt(s))")
-
-with st.sidebar.expander("🔐 Two-factor authentication"):
-    if totp_is_enabled(st.session_state.user_id):
-        remaining = totp_backup_codes_left(st.session_state.user_id)
-        st.success(f"2FA is **enabled**. {remaining} backup code(s) remaining.")
-        st.caption(
-            "To disable, enter your current password and confirm."
-        )
-        with st.form("2fa_disable_form"):
-            cur_pw = st.text_input(
-                "Current password", type="password", key="2fa_disable_pw",
-            )
-            if st.form_submit_button("Disable 2FA"):
-                try:
-                    totp_disable(st.session_state.user_id, cur_pw)
-                    st.success("2FA disabled.")
-                    st.rerun()
-                except TOTPError as exc:
-                    st.error(str(exc))
-    else:
-        # Setup ceremony lives across reruns in session_state.
-        if not st.session_state.get("totp_setup_secret"):
-            if st.button("Start 2FA setup"):
-                try:
-                    setup = totp_start_setup(
-                        st.session_state.user_id,
-                        st.session_state.user_email,
-                    )
-                    st.session_state.totp_setup_secret = setup.secret
-                    st.session_state.totp_setup_uri = setup.provisioning_uri
-                    st.rerun()
-                except TOTPError as exc:
-                    st.error(str(exc))
-        else:
-            try:
-                import io
-
-                import qrcode
-
-                img = qrcode.make(st.session_state.totp_setup_uri)
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                st.image(buf.getvalue(), caption="Scan in your authenticator app")
-            except ImportError:
-                pass
-            with st.expander("Or enter the secret manually"):
-                st.code(st.session_state.totp_setup_secret, language=None)
-            with st.form("2fa_confirm_form"):
-                otp = st.text_input("Enter the current 6-digit code")
-                if st.form_submit_button("Confirm setup", type="primary"):
+                with _up_col2:
+                    if st.button("Upgrade to Power", key="upgrade_power"):
+                        try:
+                            _url = create_checkout_session(
+                                st.session_state.user_id, "power",
+                                user_email=st.session_state.user_email,
+                            )
+                            st.session_state["checkout_url"] = _url
+                        except BillingError as exc:
+                            st.error(str(exc))
+                if st.session_state.get("checkout_url"):
+                    st.link_button("→ Complete checkout", st.session_state["checkout_url"])
+            else:
+                if st.button("Manage billing", key="billing_portal"):
                     try:
-                        result = totp_confirm_setup(st.session_state.user_id, otp)
-                        st.session_state.totp_backup_codes_once = result.backup_codes
-                        st.session_state.pop("totp_setup_secret", None)
-                        st.session_state.pop("totp_setup_uri", None)
+                        st.session_state["portal_url"] = create_portal_session(
+                            st.session_state.user_id
+                        )
+                    except BillingError as exc:
+                        st.error(str(exc))
+                if st.session_state.get("portal_url"):
+                    st.link_button("→ Open billing portal", st.session_state["portal_url"])
+
+    with st.sidebar.expander("📜 My recent activity"):
+        from services.audit import list_for_user as _list_audit
+        events = _list_audit(st.session_state.user_id, limit=20)
+        if not events:
+            st.caption("_No recorded activity yet._")
+        else:
+            for ev in events:
+                st.caption(
+                    f"`{ev.created_at.strftime('%Y-%m-%d %H:%M')}` — `{ev.kind}`"
+                )
+
+    with st.sidebar.expander("🔑 API tokens"):
+        from services.api_tokens import (
+            ApiTokenError,
+        )
+        from services.api_tokens import (
+            issue as issue_api_token,
+        )
+        from services.api_tokens import (
+            list_for_user as list_api_tokens,
+        )
+        from services.api_tokens import (
+            revoke as revoke_api_token,
+        )
+        st.caption(
+            "Long-lived bearer tokens for the REST API "
+            "(`/v1/analyze`, `/v1/applications`, etc.). "
+            "Shown ONCE on creation — save it somewhere safe."
+        )
+        with st.form("new_api_token_form"):
+            col_n, col_t = st.columns(2)
+            with col_n:
+                api_name = st.text_input("Token name", placeholder="e.g. cli-laptop")
+            with col_t:
+                api_ttl = st.selectbox(
+                    "Expiry", ["30 days", "90 days", "365 days", "Never"],
+                )
+            if st.form_submit_button("Create token", type="primary"):
+                try:
+                    ttl_days = None if api_ttl == "Never" else int(api_ttl.split()[0])
+                    issued = issue_api_token(
+                        st.session_state.user_id, api_name, ttl_days=ttl_days,
+                    )
+                    st.session_state["new_api_token_value"] = issued.raw_token
+                    st.rerun()
+                except ApiTokenError as exc:
+                    st.error(str(exc))
+
+        if st.session_state.get("new_api_token_value"):
+            st.warning(
+                "Copy this token NOW. You will not see it again — only the "
+                "8-char prefix remains in the list below."
+            )
+            st.code(st.session_state["new_api_token_value"], language=None)
+            if st.button("I've copied it"):
+                st.session_state.pop("new_api_token_value", None)
+                st.rerun()
+
+        tokens = list_api_tokens(st.session_state.user_id)
+        if tokens:
+            st.markdown("**Existing tokens**")
+            for t in tokens:
+                status = (
+                    "revoked" if t.revoked_at else
+                    "expired" if t.expires_at and t.expires_at <= datetime.utcnow() else
+                    "active"
+                )
+                cols = st.columns([4, 1])
+                with cols[0]:
+                    st.caption(
+                        f"`{t.prefix}…` · **{t.name}** · _{status}_"
+                        + (f" · last used {t.last_used_at.strftime('%Y-%m-%d')}"
+                           if t.last_used_at else "")
+                    )
+                with cols[1]:
+                    if status == "active":
+                        if st.button("Revoke", key=f"api_revoke_{t.id}"):
+                            try:
+                                revoke_api_token(st.session_state.user_id, t.id)
+                                st.rerun()
+                            except ApiTokenError as exc:
+                                st.error(str(exc))
+
+    with st.sidebar.expander("🪝 Webhooks"):
+        from db.models import WEBHOOK_EVENTS
+        st.caption(
+            "POST a signed JSON payload to your URL when events fire. Each "
+            "request carries an `X-JobOffer-Signature: sha256=…` HMAC header "
+            "computed with the webhook secret."
+        )
+        with st.form("new_webhook_form"):
+            wh_url = st.text_input("Endpoint URL", placeholder="https://example.com/hook")
+            wh_events = st.multiselect("Events", list(WEBHOOK_EVENTS), default=["stage.added"])
+            if st.form_submit_button("Add webhook", type="primary"):
+                try:
+                    wh = register_webhook(st.session_state.user_id, wh_url, wh_events)
+                    st.success("Webhook created. Secret (verify signatures with this):")
+                    st.code(wh.secret, language=None)
+                except WebhookError as exc:
+                    st.error(str(exc))
+
+        hooks = list_webhooks(st.session_state.user_id)
+        if hooks:
+            st.markdown("**Configured webhooks**")
+            for wh in hooks:
+                state = "active" if wh.active else "paused"
+                cols = st.columns([4, 1])
+                with cols[0]:
+                    st.caption(f"#{wh.id} · _{state}_ · {', '.join(wh.events)}")
+                    st.caption(wh.url)
+                with cols[1]:
+                    if st.button("Pause" if wh.active else "Resume", key=f"wh_toggle_{wh.id}"):
+                        set_webhook_active(st.session_state.user_id, wh.id, not wh.active)
+                        st.rerun()
+                    if st.button("🗑️", key=f"wh_del_{wh.id}"):
+                        delete_webhook(st.session_state.user_id, wh.id)
+                        st.rerun()
+
+            deliveries = list_webhook_deliveries(st.session_state.user_id, limit=8)
+            if deliveries:
+                st.markdown("**Recent deliveries**")
+                for d in deliveries:
+                    icon = "✅" if d.success else "❌"
+                    code = d.status_code if d.status_code is not None else "—"
+                    st.caption(f"{icon} `{d.event}` → HTTP {code} ({d.attempts} attempt(s))")
+
+    with st.sidebar.expander("🔐 Two-factor authentication"):
+        if totp_is_enabled(st.session_state.user_id):
+            remaining = totp_backup_codes_left(st.session_state.user_id)
+            st.success(f"2FA is **enabled**. {remaining} backup code(s) remaining.")
+            st.caption(
+                "To disable, enter your current password and confirm."
+            )
+            with st.form("2fa_disable_form"):
+                cur_pw = st.text_input(
+                    "Current password", type="password", key="2fa_disable_pw",
+                )
+                if st.form_submit_button("Disable 2FA"):
+                    try:
+                        totp_disable(st.session_state.user_id, cur_pw)
+                        st.success("2FA disabled.")
                         st.rerun()
                     except TOTPError as exc:
                         st.error(str(exc))
-            if st.button("Cancel setup", key="2fa_cancel"):
-                st.session_state.pop("totp_setup_secret", None)
-                st.session_state.pop("totp_setup_uri", None)
-                st.rerun()
+        else:
+            # Setup ceremony lives across reruns in session_state.
+            if not st.session_state.get("totp_setup_secret"):
+                if st.button("Start 2FA setup"):
+                    try:
+                        setup = totp_start_setup(
+                            st.session_state.user_id,
+                            st.session_state.user_email,
+                        )
+                        st.session_state.totp_setup_secret = setup.secret
+                        st.session_state.totp_setup_uri = setup.provisioning_uri
+                        st.rerun()
+                    except TOTPError as exc:
+                        st.error(str(exc))
+            else:
+                try:
+                    import io
 
-        # One-shot display of freshly-generated backup codes.
-        if st.session_state.get("totp_backup_codes_once"):
-            st.success("✅ 2FA enabled!")
+                    import qrcode
+
+                    img = qrcode.make(st.session_state.totp_setup_uri)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    st.image(buf.getvalue(), caption="Scan in your authenticator app")
+                except ImportError:
+                    pass
+                # A checkbox, not an expander: this already sits inside the
+                # sidebar 2FA expander and Streamlit forbids nesting them.
+                if st.checkbox("Show the secret to enter manually", key="totp_show_secret"):
+                    st.code(st.session_state.totp_setup_secret, language=None)
+                with st.form("2fa_confirm_form"):
+                    otp = st.text_input("Enter the current 6-digit code")
+                    if st.form_submit_button("Confirm setup", type="primary"):
+                        try:
+                            result = totp_confirm_setup(st.session_state.user_id, otp)
+                            st.session_state.totp_backup_codes_once = result.backup_codes
+                            st.session_state.pop("totp_setup_secret", None)
+                            st.session_state.pop("totp_setup_uri", None)
+                            st.rerun()
+                        except TOTPError as exc:
+                            st.error(str(exc))
+                if st.button("Cancel setup", key="2fa_cancel"):
+                    st.session_state.pop("totp_setup_secret", None)
+                    st.session_state.pop("totp_setup_uri", None)
+                    st.rerun()
+
+            # One-shot display of freshly-generated backup codes.
+            if st.session_state.get("totp_backup_codes_once"):
+                st.success("✅ 2FA enabled!")
+                st.warning(
+                    "**Save these backup codes now.** Each works once — store "
+                    "them somewhere safe. You will NOT see them again."
+                )
+                for code in st.session_state["totp_backup_codes_once"]:
+                    st.code(code, language=None)
+                if st.button("I've saved them — hide"):
+                    st.session_state.pop("totp_backup_codes_once", None)
+                    st.rerun()
+
+    with st.sidebar.expander("🗄 Privacy & account"):
+        from services.account_export import export_json
+        from services.auth import AuthError as _AuthError
+        from services.auth import delete_account
+
+        st.caption("Download everything we hold about you, or delete your account.")
+        st.download_button(
+            "⬇️ Download all my data (JSON)",
+            data=export_json(st.session_state.user_id),
+            file_name="my_joboffer_data.json",
+            mime="application/json",
+            key="account_export_btn",
+        )
+
+        st.markdown("---")
+        st.markdown("**Danger zone**")
+        if not st.session_state.get("account_delete_armed"):
+            if st.button("Delete my account…"):
+                st.session_state["account_delete_armed"] = True
+                st.rerun()
+        else:
             st.warning(
-                "**Save these backup codes now.** Each works once — store "
-                "them somewhere safe. You will NOT see them again."
+                "This permanently deletes your account and ALL data (applications, "
+                "CV, artifacts, tokens). This cannot be undone."
             )
-            for code in st.session_state["totp_backup_codes_once"]:
-                st.code(code, language=None)
-            if st.button("I've saved them — hide"):
-                st.session_state.pop("totp_backup_codes_once", None)
+            with st.form("delete_account_form"):
+                del_pw = st.text_input("Confirm current password", type="password")
+                col_d, col_c = st.columns(2)
+                do_delete = col_d.form_submit_button("Permanently delete", type="primary")
+                cancel = col_c.form_submit_button("Cancel")
+            if cancel:
+                st.session_state.pop("account_delete_armed", None)
+                st.rerun()
+            if do_delete:
+                try:
+                    delete_account(st.session_state.user_id, del_pw)
+                    # Wipe the session entirely and return to the auth gate.
+                    for key in list(st.session_state.keys()):
+                        st.session_state.pop(key, None)
+                    st.rerun()
+                except _AuthError as exc:
+                    st.error(str(exc))
+
+    with st.sidebar.expander("🔒 Change password"):
+        with st.form("change_pw_form"):
+            cur_pw = st.text_input("Current password", type="password", key="cur_pw")
+            new_pw = st.text_input("New password", type="password", key="new_pw", help="Minimum 8 characters.")
+            if st.form_submit_button("Update password"):
+                try:
+                    change_password(st.session_state.user_id, cur_pw, new_pw)
+                    st.success("Password updated.")
+                except AuthError as exc:
+                    st.error(str(exc))
+
+    with st.sidebar.expander("📲 Link Telegram"):
+        link = get_link(st.session_state.user_id)
+        if link is None:
+            st.caption(
+                "Generate a binding token, then send `/bind <token>` to the bot. "
+                "Once linked, you'll get a Telegram ping when any of your saved "
+                "applications gets a new pipeline stage."
+            )
+            if st.button("Generate binding token"):
+                tok = issue_binding_token(st.session_state.user_id)
+                st.code(f"/bind {tok}", language=None)
+                st.caption("Valid for 15 minutes. Paste into the bot.")
+        else:
+            username = f"@{link.chat_username}" if link.chat_username else f"chat {link.chat_id}"
+            st.success(f"Linked to {username}.")
+            notify_key = f"notify_on_stage_pref_{st.session_state.user_id}"
+            new_pref = st.toggle(
+                "Notify on new stage events",
+                value=link.notify_on_stage,
+                key=notify_key,
+            )
+            if new_pref != link.notify_on_stage:
+                try:
+                    set_notify_on_stage(st.session_state.user_id, new_pref)
+                    st.rerun()
+                except TelegramLinkError as exc:
+                    st.error(str(exc))
+
+            # Inactivity-reminder threshold (0 disables the inactivity ping
+            # without losing per-stage notifications).
+            threshold_key = f"inactive_days_{st.session_state.user_id}"
+            new_threshold = st.number_input(
+                "Inactivity reminder threshold (days, 0 = off)",
+                min_value=0,
+                max_value=180,
+                value=link.inactive_reminder_days,
+                step=1,
+                key=threshold_key,
+            )
+            if int(new_threshold) != link.inactive_reminder_days:
+                try:
+                    set_inactive_threshold(st.session_state.user_id, int(new_threshold))
+                    st.rerun()
+                except PermissionError as exc:
+                    st.error(str(exc))
+            st.caption(
+                "Scheduled job (`python -m worker.reminders`) sends a Telegram "
+                "summary of applications that haven't moved within this window."
+            )
+
+            if st.button("Disconnect"):
+                unlink(st.session_state.user_id)
                 st.rerun()
 
-with st.sidebar.expander("🗄 Privacy & account"):
-    from services.account_export import export_json
-    from services.auth import AuthError as _AuthError
-    from services.auth import delete_account
-
-    st.caption("Download everything we hold about you, or delete your account.")
-    st.download_button(
-        "⬇️ Download all my data (JSON)",
-        data=export_json(st.session_state.user_id),
-        file_name="my_joboffer_data.json",
-        mime="application/json",
-        key="account_export_btn",
-    )
-
-    st.markdown("---")
-    st.markdown("**Danger zone**")
-    if not st.session_state.get("account_delete_armed"):
-        if st.button("Delete my account…"):
-            st.session_state["account_delete_armed"] = True
-            st.rerun()
-    else:
-        st.warning(
-            "This permanently deletes your account and ALL data (applications, "
-            "CV, artifacts, tokens). This cannot be undone."
-        )
-        with st.form("delete_account_form"):
-            del_pw = st.text_input("Confirm current password", type="password")
-            col_d, col_c = st.columns(2)
-            do_delete = col_d.form_submit_button("Permanently delete", type="primary")
-            cancel = col_c.form_submit_button("Cancel")
-        if cancel:
-            st.session_state.pop("account_delete_armed", None)
-            st.rerun()
-        if do_delete:
-            try:
-                delete_account(st.session_state.user_id, del_pw)
-                # Wipe the session entirely and return to the auth gate.
-                for key in list(st.session_state.keys()):
-                    st.session_state.pop(key, None)
-                st.rerun()
-            except _AuthError as exc:
-                st.error(str(exc))
-
-with st.sidebar.expander("🔒 Change password"):
-    with st.form("change_pw_form"):
-        cur_pw = st.text_input("Current password", type="password", key="cur_pw")
-        new_pw = st.text_input("New password", type="password", key="new_pw", help="Minimum 8 characters.")
-        if st.form_submit_button("Update password"):
-            try:
-                change_password(st.session_state.user_id, cur_pw, new_pw)
-                st.success("Password updated.")
-            except AuthError as exc:
-                st.error(str(exc))
-
-with st.sidebar.expander("📲 Link Telegram"):
-    link = get_link(st.session_state.user_id)
-    if link is None:
-        st.caption(
-            "Generate a binding token, then send `/bind <token>` to the bot. "
-            "Once linked, you'll get a Telegram ping when any of your saved "
-            "applications gets a new pipeline stage."
-        )
-        if st.button("Generate binding token"):
-            tok = issue_binding_token(st.session_state.user_id)
-            st.code(f"/bind {tok}", language=None)
-            st.caption("Valid for 15 minutes. Paste into the bot.")
-    else:
-        username = f"@{link.chat_username}" if link.chat_username else f"chat {link.chat_id}"
-        st.success(f"Linked to {username}.")
-        notify_key = f"notify_on_stage_pref_{st.session_state.user_id}"
-        new_pref = st.toggle(
-            "Notify on new stage events",
-            value=link.notify_on_stage,
-            key=notify_key,
-        )
-        if new_pref != link.notify_on_stage:
-            try:
-                set_notify_on_stage(st.session_state.user_id, new_pref)
-                st.rerun()
-            except TelegramLinkError as exc:
-                st.error(str(exc))
-
-        # Inactivity-reminder threshold (0 disables the inactivity ping
-        # without losing per-stage notifications).
-        threshold_key = f"inactive_days_{st.session_state.user_id}"
-        new_threshold = st.number_input(
-            "Inactivity reminder threshold (days, 0 = off)",
-            min_value=0,
-            max_value=180,
-            value=link.inactive_reminder_days,
-            step=1,
-            key=threshold_key,
-        )
-        if int(new_threshold) != link.inactive_reminder_days:
-            try:
-                set_inactive_threshold(st.session_state.user_id, int(new_threshold))
-                st.rerun()
-            except PermissionError as exc:
-                st.error(str(exc))
-        st.caption(
-            "Scheduled job (`python -m worker.reminders`) sends a Telegram "
-            "summary of applications that haven't moved within this window."
-        )
-
-        if st.button("Disconnect"):
-            unlink(st.session_state.user_id)
-            st.rerun()
-
-if os.getenv("TELEGRAM_BOT_USERNAME"):
-    bot_url = f"https://t.me/{os.getenv('TELEGRAM_BOT_USERNAME').lstrip('@')}"
+_telegram_bot_username = env_str("TELEGRAM_BOT_USERNAME")
+if _telegram_bot_username:
+    bot_url = f"https://t.me/{_telegram_bot_username.lstrip('@')}"
     st.sidebar.markdown(f"💬 [Use the Telegram bot]({bot_url})")
 
 st.sidebar.title("About")
@@ -959,19 +988,52 @@ else:
 
 # Sign out lives at the bottom so it isn't the second sidebar click target.
 st.sidebar.markdown("---")
-if st.sidebar.button("Sign out", use_container_width=True):
-    for key in ("user_id", "user_email", "last_result", "last_inputs"):
-        st.session_state.pop(key, None)
+if not PERSONAL_MODE and st.sidebar.button("Sign out", use_container_width=True):
+    # Clear everything: API-token values, billing-portal links, 2FA backup
+    # codes and import previews would otherwise carry over to the next login
+    # in this browser tab.
+    st.session_state.clear()
     st.rerun()
 
-analyze_tab, applications_tab, analytics_tab, cv_tab, test_tab = st.tabs(
-    ["🔍 Analyze a posting", "📌 My Applications", "📊 Analytics", "📝 CV & Projects", "🧪 System test"]
+_TAB_NAMES = {
+    "discover": "🔭 Discover", "analyze": "🔍 Analyze a posting",
+    "applications": "📌 My Applications", "analytics": "📊 Analytics",
+    "cv": "📝 CV & Profile", "test": "🧪 System test",
+}
+_tab_order = (
+    ["discover", "analyze", "applications", "analytics", "cv", "test"] if PERSONAL_MODE
+    else ["analyze", "discover", "applications", "analytics", "cv", "test"]
+)
+_tabs = dict(zip(_tab_order, st.tabs([_TAB_NAMES[k] for k in _tab_order])))
+analyze_tab, applications_tab, analytics_tab, cv_tab, test_tab = (
+    _tabs[k] for k in ("analyze", "applications", "analytics", "cv", "test")
 )
 
 
 # ---------------------------------------------------------------------------
 # Analyze tab
 # ---------------------------------------------------------------------------
+
+def _is_operator() -> bool:
+    """Who may run live integration probes: ADMIN_EMAILS when set; otherwise
+    everyone on a self-hosted deployment (billing off), nobody on a paid one."""
+    admins = {e.strip().lower() for e in (env_str("ADMIN_EMAILS") or "").split(",") if e.strip()}
+    if admins:
+        return (st.session_state.get("user_email") or "").lower() in admins
+    from services.billing import billing_enabled
+    return not billing_enabled()
+
+
+def _render_sections(value) -> None:
+    """Render a stage output (a dict of markdown sections) as markdown."""
+    if isinstance(value, dict) and all(isinstance(v, str) for v in value.values()):
+        for section in value.values():
+            st.markdown(section)
+    elif isinstance(value, str):
+        st.markdown(value)
+    else:
+        st.write(value)
+
 
 def render_result(result: dict) -> None:
     verdict = result.get("verdict") or {}
@@ -989,7 +1051,21 @@ def render_result(result: dict) -> None:
             st.write(f"- {reason}")
 
     with st.expander("🎯 Job Analysis", expanded=True):
-        st.write(result["job_details"])
+        extracted = result["job_details"].get("extracted_details") or {}
+        if isinstance(extracted, dict) and extracted:
+            for label, key in (
+                ("Company", "company_name"), ("Position", "job_title"),
+                ("Location", "location"), ("Experience", "experience_level"),
+                ("Type", "job_type"), ("Compensation", "compensation"),
+            ):
+                st.markdown(f"**{label}:** {extracted.get(key) or 'Not specified'}")
+            responsibilities = extracted.get("responsibilities") or []
+            if responsibilities:
+                st.markdown("**Responsibilities**")
+                for item in responsibilities:
+                    st.markdown(f"- {item}")
+        else:
+            st.write(result["job_details"])
         requirements = result["job_details"].get("requirements_analysis", {})
         tech_skills = requirements.get("technical_skills", []) if isinstance(requirements, dict) else []
         if tech_skills:
@@ -998,10 +1074,10 @@ def render_result(result: dict) -> None:
                 st.write(f"- {skill}")
 
     with st.expander("🏢 Company Research", expanded=True):
-        st.write(result["company_analysis"])
+        _render_sections(result["company_analysis"])
 
     with st.expander("💰 Compensation Analysis", expanded=True):
-        st.write(result["salary_analysis"])
+        _render_sections(result["salary_analysis"])
 
     resume_analysis = result.get("resume_analysis") or {}
     if resume_analysis:
@@ -1031,14 +1107,14 @@ def render_result(result: dict) -> None:
                 st.markdown("**✅ Matched required skills**")
                 if matched:
                     for s in matched:
-                        st.markdown(f"<span style='color:#22c55e'>✓</span> {s}", unsafe_allow_html=True)
+                        st.markdown(f"<span style='color:#22c55e'>✓</span> {html.escape(str(s))}", unsafe_allow_html=True)
                 else:
                     st.caption("_None matched — review the missing list._")
             with sk_col_g:
                 st.markdown("**❌ Missing required skills**")
                 if missing:
                     for s in missing:
-                        st.markdown(f"<span style='color:#ef4444'>✗</span> {s}", unsafe_allow_html=True)
+                        st.markdown(f"<span style='color:#ef4444'>✗</span> {html.escape(str(s))}", unsafe_allow_html=True)
                 else:
                     st.caption("_All required skills detected._")
 
@@ -1052,6 +1128,22 @@ def render_result(result: dict) -> None:
     st.subheader("📑 Final Recommendation")
     st.markdown(result["final_report"])
 
+
+def _needs_migration(render, *args, **kwargs) -> None:
+    """Run a UI section that depends on newer tables; on an unmigrated
+    database show how to fix it instead of halting the rest of the page."""
+    try:
+        render(*args, **kwargs)
+    except SQLAlchemyError as exc:
+        st.error(
+            "This section needs a database migration. Run `alembic upgrade head` "
+            "(see docs/ASSESSMENT.md for the safe procedure on an existing database)."
+        )
+        st.caption(f"Details: {str(exc).splitlines()[0][:200]}")
+
+
+with _tabs["discover"]:
+    _needs_migration(render_discover_tab, st.session_state.user_id, render_result, personal=PERSONAL_MODE)
 
 with analyze_tab:
     st.caption(
@@ -1070,7 +1162,7 @@ with analyze_tab:
         completed task, we hand it off to ``session_state`` so the main script
         rerun picks it up and renders it via ``render_result``.
         """
-        if not async_enabled():
+        if not (feature_enabled("background") and async_enabled()):
             return  # nothing to show when the queue isn't configured
         backgrounds = refresh_all_pending(st.session_state.user_id)
         if not backgrounds:
@@ -1170,6 +1262,12 @@ with analyze_tab:
             )
 
         st.markdown("**2. Your resume** _(optional — enables ATS match score)_")
+        _has_master_cv = get_master_cv(st.session_state.user_id) is not None
+        use_master_cv = st.checkbox(
+            "Use my master CV for the fit / ATS analysis",
+            value=_has_master_cv, disabled=not _has_master_cv,
+            help="Save one in 📝 CV & Profile. An uploaded file below takes precedence.",
+        )
         resume_file = st.file_uploader(
             "Resume — PDF, DOCX, or TXT",
             type=["pdf", "docx", "txt", "md"],
@@ -1192,7 +1290,7 @@ with analyze_tab:
                     help="What the posting itself says — leave blank if unspecified.",
                 )
 
-        if async_enabled():
+        if (feature_enabled("background") and async_enabled()):
             run_background = st.checkbox(
                 "Run in background (returns immediately; pick up the result here later)",
                 value=False,
@@ -1213,11 +1311,15 @@ with analyze_tab:
                     st.success(f"Fetched {len(posting_text)} characters from URL.")
                 except ValueError as exc:
                     st.error(str(exc))
-                    if not posting_text:
-                        st.info(
-                            "💡 The URL couldn't be parsed (JS-rendered or access-denied). "
-                            "Copy the job text and paste it in the **📝 Paste text** tab."
-                        )
+                    # Never fall back to whatever sits in the Paste tab: it may be
+                    # an older posting (or the sample), which would be analyzed
+                    # and saved under the wrong company without any warning.
+                    posting_text = ""
+                    st.info(
+                        "💡 The URL couldn't be parsed (JS-rendered or access-denied). "
+                        "Copy the job text into the **📝 Paste text** tab, clear the URL "
+                        "field, and analyze again."
+                    )
         elif raw_url_input and not is_url(raw_url_input) and len(raw_url_input) > 80:
             # User pasted job description text into the URL field — route correctly.
             st.info(
@@ -1233,12 +1335,16 @@ with analyze_tab:
                     st.warning("Resume parsed but contained no extractable text — skipping ATS.")
             except ValueError as exc:
                 st.error(f"Resume parsing failed: {exc}")
+        elif use_master_cv:
+            _cv = get_master_cv(st.session_state.user_id)
+            resume_text = _cv.raw_text if _cv else ""
 
         if not posting_text:
-            st.warning(
-                "We need either a fetchable URL or pasted job-description text "
-                "to start. Add one of those and try again."
-            )
+            if not (raw_url_input and is_url(raw_url_input)):
+                st.warning(
+                    "We need either a fetchable URL or pasted job-description text "
+                    "to start. Add one of those and try again."
+                )
         else:
             # Manual fields are now hints, not requirements — extraction fills the gaps.
             job_data = {
@@ -1256,7 +1362,8 @@ with analyze_tab:
             from services.rate_limit import RateLimitExceeded
             from services.usage import BudgetExceeded
             try:
-                check_user_quota(st.session_state.user_id)
+                if not PERSONAL_MODE:
+                    check_user_quota(st.session_state.user_id)
             except (RateLimitExceeded, BudgetExceeded, TierLimitExceeded) as exc:
                 st.error(str(exc))
                 st.stop()
@@ -1319,9 +1426,11 @@ with analyze_tab:
 
             # Stable per-(user, inputs) checkpoint key so retrying the same
             # form short-circuits stages that already completed.
+            from services.profile import profile_prompt_for
+            profile_text = profile_prompt_for(st.session_state.user_id)
             checkpoint_key = compute_checkpoint_key(
-                posting_text, job_data, selected_model, resume_text,
-                user_id=st.session_state.user_id,
+                posting_text, {**job_data, "_profile": profile_text}, selected_model,
+                resume_text, user_id=st.session_state.user_id,
             )
             ckpt_store = get_checkpoint_store()
             prior = ckpt_store.completed_stages(checkpoint_key)
@@ -1344,6 +1453,7 @@ with analyze_tab:
                     progress_callback=update_progress,
                     resume_text=resume_text,
                     checkpoint_key=checkpoint_key,
+                    profile_text=profile_text,
                 )
 
             if result.get("error"):
@@ -1379,16 +1489,25 @@ with analyze_tab:
 
         with st.form("save_application_form"):
             st.markdown("### Save to applications")
+            last_inputs = dict(st.session_state.get("last_inputs") or {})
+            # Editable here so a posting that doesn't name the employer (or a
+            # mis-extracted title) can still be saved without re-running.
+            col_c, col_t = st.columns(2)
+            with col_c:
+                save_company = st.text_input("Company", last_inputs.get("company_name") or "")
+            with col_t:
+                save_title = st.text_input("Job title", last_inputs.get("job_title") or "")
             col_s, col_n = st.columns([1, 3])
             with col_s:
                 save_status = st.selectbox("Status", APPLICATION_STATUSES, index=0)
             with col_n:
                 save_notes = st.text_input("Notes (optional)", "")
             if st.form_submit_button("💾 Save analysis", type="primary"):
+                last_inputs.update(company_name=save_company.strip(), job_title=save_title.strip())
                 try:
                     save_analysis(
                         user_id=st.session_state.user_id,
-                        manual_inputs=st.session_state.last_inputs,
+                        manual_inputs=last_inputs,
                         analysis_result=st.session_state.last_result,
                         status=save_status,
                         notes=save_notes or None,
@@ -1439,9 +1558,13 @@ with applications_tab:
             if st.button("Parse with LLM", key="app_free_preview"):
                 with st.spinner("Parsing applications…"):
                     try:
-                        st.session_state["app_import_previews"] = parse_applications_freeform(app_free)
-                    except BulkImportError as exc:
+                        st.session_state["app_import_previews"] = parse_applications_freeform(
+                            app_free, user_id=st.session_state.user_id
+                        )
+                    except (BulkImportError, BudgetExceeded, BillingTierError) as exc:
                         st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                        st.error(f"Parsing failed: {exc}")
 
         app_previews = st.session_state.get("app_import_previews") or []
         if app_previews:
@@ -1704,9 +1827,11 @@ with applications_tab:
                             )
                             # Best-effort Telegram notification — never raises.
                             # (The stage.added webhook fires inside add_stage.)
-                            notify_stage_added(
-                                st.session_state.user_id, rec, new_stage,
-                            )
+                            if feature_enabled("notifications"):
+                                if feature_enabled("notifications"):
+                                    notify_stage_added(
+                                        st.session_state.user_id, rec, new_stage,
+                                    )
                             st.rerun()
                         except StageError as exc:
                             st.error(str(exc))
@@ -1773,8 +1898,10 @@ with applications_tab:
                                     )
                                     st.success(f"Saved tailored CV #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError, BillingTierError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError, BudgetExceeded) as exc:
                                     st.error(str(exc))
+                                except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                                    st.error(f"Generation failed, nothing was saved: {exc}")
                     with art_col2:
                         # Tone preset for cover letters — persists per-application
                         # in session_state so the user's last choice sticks.
@@ -1796,8 +1923,10 @@ with applications_tab:
                                     )
                                     st.success(f"Saved cover letter #{art.id}.")
                                     st.rerun()
-                                except (TailoringError, MasterCVError, BillingTierError) as exc:
+                                except (TailoringError, MasterCVError, BillingTierError, BudgetExceeded) as exc:
                                     st.error(str(exc))
+                                except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                                    st.error(f"Generation failed, nothing was saved: {exc}")
 
                 # List existing artifacts (newest first).
                 arts = list_artifacts(st.session_state.user_id, rec.id)
@@ -1988,17 +2117,19 @@ with applications_tab:
                                 except PDFExportError as exc:
                                     st.caption(f"PDF disabled: {exc}")
 
-                # ----- Share links -----
-                from services.sharing import (
-                    ShareError,
-                    create_share,
-                    list_shares_for_application,
-                )
-                from services.sharing import (
-                    revoke as revoke_share,
-                )
-                if st.checkbox("🔗 Share read-only link", key=f"share_expand_{rec.id}"):
-                    base_url = os.getenv("APP_BASE_URL", "").rstrip("/")
+                # ----- Share links (side feature) -----
+                if feature_enabled("sharing") and st.checkbox(
+                    "🔗 Share read-only link", key=f"share_expand_{rec.id}"
+                ):
+                    from services.sharing import (
+                        ShareError,
+                        create_share,
+                        list_shares_for_application,
+                    )
+                    from services.sharing import (
+                        revoke as revoke_share,
+                    )
+                    base_url = env_str("APP_BASE_URL", "").rstrip("/")
                     existing_shares = list_shares_for_application(
                         st.session_state.user_id, rec.id,
                     )
@@ -2238,7 +2369,11 @@ with cv_tab:
         "every application can pull from them."
     )
 
-    cv_section, proj_section = st.tabs(["📄 Master CV", "🧩 Project gallery"])
+    profile_section, cv_section, proj_section = st.tabs(
+        ["👤 Search profile", "📄 Master CV", "🧩 Project gallery"]
+    )
+    with profile_section:
+        _needs_migration(render_profile_editor, st.session_state.user_id)
 
     # ----- Master CV ----------------------------------------------------------
     with cv_section:
@@ -2302,8 +2437,10 @@ with cv_tab:
                             structured = parse_master_cv(st.session_state.user_id)
                             st.success("Parsed.")
                             st.json(structured)
-                        except MasterCVError as exc:
+                        except (MasterCVError, BudgetExceeded, BillingTierError) as exc:
                             st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                            st.error(f"Parsing failed: {exc}")
             with pdf_col:
                 try:
                     cv_pdf = markdown_to_pdf(
@@ -2462,9 +2599,13 @@ with cv_tab:
                 if st.button("Parse with LLM", key="proj_free_preview"):
                     with st.spinner("Parsing projects…"):
                         try:
-                            st.session_state["proj_import_previews"] = parse_projects_freeform(free_text)
-                        except BulkImportError as exc:
+                            st.session_state["proj_import_previews"] = parse_projects_freeform(
+                                free_text, user_id=st.session_state.user_id
+                            )
+                        except (BulkImportError, BudgetExceeded, BillingTierError) as exc:
                             st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001 - provider/LLM failure
+                            st.error(f"Parsing failed: {exc}")
 
             previews = st.session_state.get("proj_import_previews") or []
             if previews:
@@ -2598,109 +2739,112 @@ with cv_tab:
 # ---------------------------------------------------------------------------
 
 with test_tab:
-    st.header("🧪 System health check")
-    st.caption(
-        "Runs a lightweight probe of every configured integration. "
-        "LLM probes make one tiny real API call (~10 tokens) so actual "
-        "connectivity is verified. Everything else is connection-level only — "
-        "no writes, no side-effects."
-    )
-
-    run_test_btn = st.button("▶ Run system test", type="primary", key="run_system_test_btn")
-
-    if run_test_btn:
-        st.session_state["system_test_results"] = None  # clear stale results
-
-    if run_test_btn or st.session_state.get("system_test_results") is not None:
-        if run_test_btn:
-            from services.system_test import run_system_test
-            with st.spinner("Running probes…"):
-                results = run_system_test()
-            st.session_state["system_test_results"] = results
-        else:
-            results = st.session_state["system_test_results"]
-
-        # ── results table ────────────────────────────────────────────────────
-        st.subheader("Test results")
-        all_ok = all(r.ok or r.skipped for r in results)
-        if all_ok:
-            st.success("All configured integrations passed ✅")
-        else:
-            failures = [r.name for r in results if not r.ok and not r.skipped]
-            st.error(f"Issues detected with: {', '.join(failures)}")
-
-        for r in results:
-            cols = st.columns([0.05, 0.35, 0.45, 0.15])
-            cols[0].markdown(r.icon)
-            cols[1].markdown(f"**{r.name}**")
-            cols[2].markdown(r.message)
-            cols[3].markdown(r.duration_str if not r.skipped else "_skipped_")
-
-        st.divider()
-
-        # ── mock demo analysis display ───────────────────────────────────────
-        st.subheader("📋 Demo analysis")
-        st.caption(
-            "Pre-baked sample — shows every UI section without spending LLM tokens. "
-            "This is what a real analysis looks like."
-        )
-
-        from services.system_test import MOCK_ANALYSIS
-        mock = MOCK_ANALYSIS
-        details = mock["job_details"]["extracted_details"]
-        req = mock["job_details"]["requirements_analysis"]
-        verdict = mock["verdict"]
-
-        # Verdict banner
-        confidence = verdict.get("confidence", 0)
-        decision = verdict.get("decision", "")
-        verdict_color = {"Apply": "green", "Consider": "orange", "Avoid": "red"}.get(decision, "blue")
-        st.markdown(
-            f"**Verdict:** :{verdict_color}[{decision}] &nbsp;·&nbsp; "
-            f"Confidence **{confidence}/10**"
-        )
-
-        reason_cols = st.columns(2)
-        with reason_cols[0]:
-            st.markdown("**Why apply**")
-            for r in verdict.get("reasons", []):
-                st.markdown(f"- {r}")
-        with reason_cols[1]:
-            st.markdown("**Watch-outs**")
-            for c in verdict.get("cautions", []):
-                st.markdown(f"- {c}")
-
-        st.divider()
-
-        # Job details
-        d1, d2 = st.columns(2)
-        with d1:
-            st.markdown("**Position**")
-            st.markdown(f"🏢 {details.get('company_name', '')}")
-            st.markdown(f"💼 {details.get('job_title', '')}")
-            st.markdown(f"📍 {details.get('location', '')}")
-            st.markdown(f"💰 {details.get('compensation', '')}")
-        with d2:
-            st.markdown("**Required skills**")
-            for skill in req.get("technical_skills", []):
-                st.markdown(f"- {skill}")
-
-        st.divider()
-
-        # Analysis sections (company / salary / report)
-        for section_key, section_label in [
-            ("company_analysis", "Company analysis"),
-            ("salary_analysis", "Compensation analysis"),
-        ]:
-            section = mock.get(section_key, {})
-            if section:
-                st.markdown(f"**{section_label}**")
-                for _k, v in section.items():
-                    st.markdown(v)
-                st.divider()
-
-        st.markdown("**Full report**")
-        st.markdown(mock.get("final_report", ""))
-
+    if not _is_operator():
+        st.info("System checks are available to the operator of this deployment.")
     else:
-        st.info("Click **▶ Run system test** above to probe all configured integrations.")
+        st.header("🧪 System health check")
+        st.caption(
+            "Runs a lightweight probe of every configured integration. "
+            "LLM probes make one tiny real API call (~10 tokens) so actual "
+            "connectivity is verified. Everything else is connection-level only — "
+            "no writes, no side-effects."
+        )
+
+        run_test_btn = st.button("▶ Run system test", type="primary", key="run_system_test_btn")
+
+        if run_test_btn:
+            st.session_state["system_test_results"] = None  # clear stale results
+
+        if run_test_btn or st.session_state.get("system_test_results") is not None:
+            if run_test_btn:
+                from services.system_test import run_system_test
+                with st.spinner("Running probes…"):
+                    results = run_system_test()
+                st.session_state["system_test_results"] = results
+            else:
+                results = st.session_state["system_test_results"]
+
+            # ── results table ────────────────────────────────────────────────────
+            st.subheader("Test results")
+            all_ok = all(r.ok or r.skipped for r in results)
+            if all_ok:
+                st.success("All configured integrations passed ✅")
+            else:
+                failures = [r.name for r in results if not r.ok and not r.skipped]
+                st.error(f"Issues detected with: {', '.join(failures)}")
+
+            for r in results:
+                cols = st.columns([0.05, 0.35, 0.45, 0.15])
+                cols[0].markdown(r.icon)
+                cols[1].markdown(f"**{r.name}**")
+                cols[2].markdown(r.message)
+                cols[3].markdown(r.duration_str if not r.skipped else "_skipped_")
+
+            st.divider()
+
+            # ── mock demo analysis display ───────────────────────────────────────
+            st.subheader("📋 Demo analysis")
+            st.caption(
+                "Pre-baked sample — shows every UI section without spending LLM tokens. "
+                "This is what a real analysis looks like."
+            )
+
+            from services.system_test import MOCK_ANALYSIS
+            mock = MOCK_ANALYSIS
+            details = mock["job_details"]["extracted_details"]
+            req = mock["job_details"]["requirements_analysis"]
+            verdict = mock["verdict"]
+
+            # Verdict banner
+            confidence = verdict.get("confidence", 0)
+            decision = verdict.get("decision", "")
+            verdict_color = {"Apply": "green", "Consider": "orange", "Avoid": "red"}.get(decision, "blue")
+            st.markdown(
+                f"**Verdict:** :{verdict_color}[{decision}] &nbsp;·&nbsp; "
+                f"Confidence **{confidence}/10**"
+            )
+
+            reason_cols = st.columns(2)
+            with reason_cols[0]:
+                st.markdown("**Why apply**")
+                for r in verdict.get("reasons", []):
+                    st.markdown(f"- {r}")
+            with reason_cols[1]:
+                st.markdown("**Watch-outs**")
+                for c in verdict.get("cautions", []):
+                    st.markdown(f"- {c}")
+
+            st.divider()
+
+            # Job details
+            d1, d2 = st.columns(2)
+            with d1:
+                st.markdown("**Position**")
+                st.markdown(f"🏢 {details.get('company_name', '')}")
+                st.markdown(f"💼 {details.get('job_title', '')}")
+                st.markdown(f"📍 {details.get('location', '')}")
+                st.markdown(f"💰 {details.get('compensation', '')}")
+            with d2:
+                st.markdown("**Required skills**")
+                for skill in req.get("technical_skills", []):
+                    st.markdown(f"- {skill}")
+
+            st.divider()
+
+            # Analysis sections (company / salary / report)
+            for section_key, section_label in [
+                ("company_analysis", "Company analysis"),
+                ("salary_analysis", "Compensation analysis"),
+            ]:
+                section = mock.get(section_key, {})
+                if section:
+                    st.markdown(f"**{section_label}**")
+                    for _k, v in section.items():
+                        st.markdown(v)
+                    st.divider()
+
+            st.markdown("**Full report**")
+            st.markdown(mock.get("final_report", ""))
+
+        else:
+            st.info("Click **▶ Run system test** above to probe all configured integrations.")

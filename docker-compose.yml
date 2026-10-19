@@ -30,6 +30,7 @@ services:
 
   app:
     build: .
+    restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgresql://joboffer:joboffer@postgres:5432/joboffer
@@ -49,6 +50,7 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgresql://joboffer:joboffer@postgres:5432/joboffer
@@ -59,18 +61,42 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    command: celery -A worker.celery_app:get_celery_app worker --loglevel=info
+    command: celery -A worker.celery_app:app worker --loglevel=info
 
   bot:
     build: .
+    restart: unless-stopped
     profiles: ["bot"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql://joboffer:joboffer@postgres:5432/joboffer
       CELERY_BROKER_URL: redis://redis:6379/0
+      USE_ALEMBIC: "1"
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: python -m bot.main
+
+  # Inactivity reminders + DB backups need something to invoke them on a
+  # schedule. There's no host crontab inside this stack, so this runs both
+  # in-process, forever (see worker/scheduler.py). Backups land in the
+  # "backups" volume; set BACKUP_UPLOAD_CMD to also copy them offsite.
+  scheduler:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://joboffer:joboffer@postgres:5432/joboffer
+      USE_ALEMBIC: "1"
+    volumes:
+      - backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m worker.scheduler
 
 volumes:
   pgdata:
+  backups:

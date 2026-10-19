@@ -14,20 +14,24 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
-from agents.orchestrator import run_analysis
 from services.analysis_runner import (
     async_enabled,
+    check_user_quota,
     enqueue_analysis,
     get_async_result,
+    run_analysis_sync,
 )
+from services.billing import TierLimitExceeded
+from services.rate_limit import RateLimitExceeded
 from services.telegram_link import (
     TelegramLinkError,
     complete_binding,
     get_user_id_by_chat,
     unlink,
 )
+from services.usage import BudgetExceeded
 from tools.url_ingest import fetch_job_posting, is_url
-from utils.env import env_float
+from utils.env import env_bool, env_float
 
 logger = logging.getLogger(__name__)
 
@@ -174,11 +178,31 @@ async def handle_me(reply: Reply, args: str, chat_id: int) -> None:
     await reply(f"Linked to web account *#{user_id}*.")
 
 
-async def handle_analyze(reply: Reply, args: str) -> None:
+async def handle_analyze(reply: Reply, args: str, chat_id: Optional[int] = None) -> None:
     parsed = parse_analyze_args(args)
     if not parsed.url and not parsed.text:
         await reply("Please include a URL or pasted posting text. " + HELP_TEXT)
         return
+
+    # Linked chats are metered exactly like the web UI / API (request-count
+    # rate limit + spend budget + tier quota). Unlinked chats are refused by
+    # default: anyone who finds the bot would otherwise spend the operator's
+    # LLM key (and trigger server-side URL fetches) without limit — and a
+    # metered user could escape their quota with /unbind.
+    # TELEGRAM_ALLOW_UNLINKED_ANALYZE=1 restores anonymous use for private bots.
+    user_id = await asyncio.to_thread(get_user_id_by_chat, chat_id) if chat_id is not None else None
+    if user_id is None and not env_bool("TELEGRAM_ALLOW_UNLINKED_ANALYZE"):
+        await reply(
+            "Link this chat to your web account first: open Settings → Telegram in "
+            "the web app, then send `/bind <token>` here."
+        )
+        return
+    if user_id is not None:
+        try:
+            await asyncio.to_thread(check_user_quota, user_id)
+        except (RateLimitExceeded, BudgetExceeded, TierLimitExceeded) as exc:
+            await reply(f"⚠️ {exc}")
+            return
 
     posting_text = parsed.text
     if parsed.url:
@@ -192,7 +216,7 @@ async def handle_analyze(reply: Reply, args: str) -> None:
 
     await reply("Analyzing — this can take 30-60 seconds…")
     try:
-        result = await _run_analysis_for_bot(posting_text)
+        result = await _run_analysis_for_bot(posting_text, user_id)
     except Exception as exc:  # noqa: BLE001 - reported to user
         logger.exception("Telegram analyze failed.")
         await reply(f"❌ Analysis crashed: {exc}")
@@ -213,21 +237,25 @@ _BOT_POLL_INTERVAL = env_float("BOT_TASK_POLL_INTERVAL", 2.0)
 _BOT_POLL_TIMEOUT = env_float("BOT_TASK_TIMEOUT", 600.0)
 
 
-async def _run_analysis_for_bot(posting_text: str) -> dict:
+async def _run_analysis_for_bot(posting_text: str, user_id: Optional[int] = None) -> dict:
     """Pick the best execution path: async queue if available, else inline.
 
     Async path: enqueue via Celery, then poll for completion off the event
     loop so the bot stays responsive to other users while a long analysis
-    runs in the worker.
+    runs in the worker. ``user_id`` (when the chat is linked) is threaded
+    through so LLM usage/cost is attributed to the right account instead of
+    ledgering with a NULL owner.
     """
     if async_enabled():
-        task_id = enqueue_analysis(posting_text, manual_inputs=None, model="fast")
+        task_id = enqueue_analysis(
+            posting_text, manual_inputs=None, model="fast", user_id=user_id
+        )
         if task_id is not None:
             return await _await_task(task_id)
-    # Inline fallback. run_analysis is sync-blocking; offload it so the asyncio
-    # loop stays free to handle other commands while we wait.
+    # Inline fallback. run_analysis_sync is sync-blocking; offload it so the
+    # asyncio loop stays free to handle other commands while we wait.
     return await asyncio.to_thread(
-        run_analysis, posting_text, None, "fast", None,
+        run_analysis_sync, posting_text, None, "fast", None, None, user_id,
     )
 
 
