@@ -402,3 +402,35 @@ class PersonalModeAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnmigratedDatabaseTests(unittest.TestCase):
+    """The live deploy has lagged migrations before: a database without the
+    new tables must not break analyses or halt the page."""
+
+    def setUp(self):
+        _fresh()
+        from sqlalchemy import text
+
+        from db.session import get_engine
+        with get_engine().begin() as conn:
+            conn.execute(text("DROP TABLE candidate_profiles"))
+            conn.execute(text("DROP TABLE discovered_jobs"))
+
+    def test_profile_prompt_is_best_effort(self):
+        from services.profile import profile_prompt_for
+        self.assertEqual(profile_prompt_for(1), "")
+
+    @unittest.skipUnless(HAS_APPTEST, "streamlit AppTest harness unavailable")
+    def test_app_still_renders_with_migration_hint(self):
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FEATHERLESS_API_KEY", "LLM_PROVIDER"):
+            os.environ.pop(k, None)
+        app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app.py"))
+        with mock.patch.dict(os.environ, {"PERSONAL_MODE": "1"}):
+            at = AppTest.from_file(app_path, default_timeout=60)
+            at.run()
+        self.assertFalse(at.exception, msg=[str(e.value) for e in at.exception])
+        self.assertTrue(any("needs a database migration" in e.value for e in at.error))
+        # The Analyze tab renders after Discover: its submit button proves the
+        # script wasn't halted by the missing tables.
+        self.assertIn("🔍 Analyze posting", [b.label for b in at.button])

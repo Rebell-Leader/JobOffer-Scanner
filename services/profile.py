@@ -17,17 +17,21 @@ and missing ones take their defaults.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from db.models import CandidateProfile as ProfileRow
 from db.session import get_session
 from utils.llm import get_completion
 from utils.security import wrap_untrusted
 from utils.text import strip_code_fence
+
+logger = logging.getLogger(__name__)
 
 WORK_MODES = ("remote", "hybrid", "onsite")
 COMPANY_STAGES = ("startup", "scale-up", "enterprise", "public sector", "non-profit")
@@ -107,6 +111,17 @@ def normalize(profile: CandidateProfile) -> CandidateProfile:
     p.watchlist = watch
     p.notes = (p.notes or "").strip()
     return p
+
+
+def profile_prompt_for(user_id: int) -> str:
+    """The user's profile as prompt text, best-effort: personalisation must
+    never break an analysis (e.g. on a database not yet migrated to the
+    candidate_profiles table), so a DB error yields "" and a log line."""
+    try:
+        return profile_as_prompt(get_profile(user_id))
+    except SQLAlchemyError as exc:
+        logger.warning("Profile unavailable for user %s (run `alembic upgrade head`?): %s", user_id, exc)
+        return ""
 
 
 def get_profile(user_id: int) -> CandidateProfile:

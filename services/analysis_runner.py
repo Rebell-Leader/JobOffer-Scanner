@@ -96,9 +96,9 @@ def run_analysis_sync(
     from services.usage import account
 
     if profile_text is None and user_id is not None:
-        from services.profile import get_profile, profile_as_prompt
+        from services.profile import profile_prompt_for
 
-        profile_text = profile_as_prompt(get_profile(user_id))
+        profile_text = profile_prompt_for(user_id)
     with account(user_id):
         return run_analysis(
             job_posting,

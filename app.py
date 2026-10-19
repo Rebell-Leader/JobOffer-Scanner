@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 import altair as alt
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
 from agents.orchestrator import run_analysis
 from db.models import APPLICATION_STATUSES, PIPELINE_STAGES
@@ -1119,8 +1120,21 @@ def render_result(result: dict) -> None:
     st.markdown(result["final_report"])
 
 
+def _needs_migration(render, *args, **kwargs) -> None:
+    """Run a UI section that depends on newer tables; on an unmigrated
+    database show how to fix it instead of halting the rest of the page."""
+    try:
+        render(*args, **kwargs)
+    except SQLAlchemyError as exc:
+        st.error(
+            "This section needs a database migration. Run `alembic upgrade head` "
+            "(see docs/ASSESSMENT.md for the safe procedure on an existing database)."
+        )
+        st.caption(f"Details: {str(exc).splitlines()[0][:200]}")
+
+
 with _tabs["discover"]:
-    render_discover_tab(st.session_state.user_id, render_result, personal=PERSONAL_MODE)
+    _needs_migration(render_discover_tab, st.session_state.user_id, render_result, personal=PERSONAL_MODE)
 
 with analyze_tab:
     st.caption(
@@ -1403,8 +1417,8 @@ with analyze_tab:
 
             # Stable per-(user, inputs) checkpoint key so retrying the same
             # form short-circuits stages that already completed.
-            from services.profile import get_profile, profile_as_prompt
-            profile_text = profile_as_prompt(get_profile(st.session_state.user_id))
+            from services.profile import profile_prompt_for
+            profile_text = profile_prompt_for(st.session_state.user_id)
             checkpoint_key = compute_checkpoint_key(
                 posting_text, {**job_data, "_profile": profile_text}, selected_model,
                 resume_text, user_id=st.session_state.user_id,
@@ -2346,7 +2360,7 @@ with cv_tab:
         ["👤 Search profile", "📄 Master CV", "🧩 Project gallery"]
     )
     with profile_section:
-        render_profile_editor(st.session_state.user_id)
+        _needs_migration(render_profile_editor, st.session_state.user_id)
 
     # ----- Master CV ----------------------------------------------------------
     with cv_section:
